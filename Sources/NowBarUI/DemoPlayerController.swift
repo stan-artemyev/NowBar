@@ -105,14 +105,13 @@ public final class DemoPlayerController: PlayerController {
         return data
     }
 
-    public func playPause() async {
+    /// Idempotent: while already playing it changes nothing (but still reports, like the real controller).
+    public func play() async {
         guard availability == .running else { return }
         let now = Date()
         switch state {
         case .playing:
-            basePosition = position(at: now)
-            anchor = now
-            state = .paused
+            break
         case .paused:
             anchor = now
             state = .playing
@@ -121,6 +120,18 @@ public final class DemoPlayerController: PlayerController {
             basePosition = 0
             anchor = now
             state = .playing
+        }
+        emit()
+    }
+
+    /// Idempotent: while paused (or stopped) it changes nothing (but still reports, like the real controller).
+    public func pause() async {
+        guard availability == .running else { return }
+        if state == .playing {
+            let now = Date()
+            basePosition = position(at: now)
+            anchor = now
+            state = .paused
         }
         emit()
     }

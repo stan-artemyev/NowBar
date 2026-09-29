@@ -1,3 +1,4 @@
+import Foundation
 import NowBarCore
 import Testing
 @testable import NowBarUI
@@ -50,14 +51,14 @@ struct MediaKeyRoutingTests {
 
     @Test func consumesTransportKeysAndForwardsThemToThePlayer() async {
         let harness = Harness()
-        harness.startAndPush(Fixture.running())
+        harness.startAndPush(Fixture.running())   // playing, so play/pause pauses
 
         #expect(harness.store.handleMediaKey(.playPause) == true)
         #expect(harness.store.handleMediaKey(.next) == true)
         #expect(harness.store.handleMediaKey(.previous) == true)
 
         await eventually { harness.player.calls.count == 4 }
-        #expect(harness.player.calls == ["start", "playPause", "nextTrack", "previousTrack"])
+        #expect(harness.player.calls == ["start", "pause", "nextTrack", "previousTrack"])
     }
 
     @Test func transportKeysAreNotConsumedUntilThePlayerIsRunning() async {
@@ -67,7 +68,41 @@ struct MediaKeyRoutingTests {
 
         harness.player.push(Fixture.running(.paused))
         #expect(harness.store.handleMediaKey(.playPause) == true)
-        await eventually { harness.player.calls.contains("playPause") }
+        await eventually { harness.player.calls.contains("play") }
+    }
+
+    @Test func playPauseKeyPausesWhatIsPlayingAndPlaysWhatIsNot() async {
+        let playing = Harness()
+        playing.startAndPush(Fixture.running(.playing))
+        #expect(playing.store.handleMediaKey(.playPause) == true)
+        await eventually { playing.player.calls.contains("pause") }
+        #expect(playing.player.calls == ["start", "pause"])
+
+        let paused = Harness()
+        paused.startAndPush(Fixture.running(.paused))
+        #expect(paused.store.handleMediaKey(.playPause) == true)
+        await eventually { paused.player.calls.contains("play") }
+        #expect(paused.player.calls == ["start", "play"])
+
+        let stopped = Harness()
+        stopped.startAndPush(Fixture.running(.stopped))
+        #expect(stopped.store.handleMediaKey(.playPause) == true)
+        await eventually { stopped.player.calls.contains("play") }
+        #expect(stopped.player.calls == ["start", "play"])
+    }
+
+    @Test func aQuickSecondPlayPauseKeyIsConsumedButDoesNothing() async {
+        let harness = Harness()
+        let moment = Date(timeIntervalSinceReferenceDate: 10_000)
+        harness.store.now = { moment }   // both presses at the same instant
+        harness.startAndPush(Fixture.running(.playing))
+
+        #expect(harness.store.handleMediaKey(.playPause) == true)
+        #expect(harness.store.handleMediaKey(.playPause) == true)   // still ours, so macOS never sees it
+
+        await eventually { harness.player.calls.contains("pause") }
+        try? await Task.sleep(for: .milliseconds(30))   // give a wrongly sent second call time to show up
+        #expect(harness.player.calls == ["start", "pause"])
     }
 
     @Test func theInstalledHandlerRoutesThroughTheStore() async {

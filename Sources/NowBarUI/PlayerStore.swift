@@ -8,7 +8,8 @@ import os
 /// The single source of truth for the panel and the menu bar label.
 ///
 /// It owns the player, volume and media key services, mirrors their state, applies
-/// optimistic updates for user actions (the controller's next `onChange` confirms them)
+/// optimistic updates for user actions (the controller's next `onChange` confirms them;
+/// a play/pause request additionally outranks contradicting snapshots for a moment, see `reconcile(_:)`)
 /// and persists the user's settings.
 @MainActor
 @Observable
@@ -82,11 +83,31 @@ public final class PlayerStore {
     /// The artwork load in flight, if any (nil once it has finished).
     @ObservationIgnored private(set) var artworkTask: Task<Void, Never>?
     @ObservationIgnored private var artworkLoadID = 0
+    /// When the last play/pause request that was acted on came in (see `playPause()`).
+    @ObservationIgnored private var lastPlayPauseRequest: Date?
+    /// The play/pause request the player hasn't confirmed yet (see `reconcile(_:)`).
+    @ObservationIgnored private var playbackHold: PlaybackHold?
 
     /// Seconds between polls while the panel is visible. Tests shorten it.
     @ObservationIgnored var pollInterval: Duration = .seconds(2)
-    /// Clock for optimistic updates. Tests replace it.
+    /// Clock for optimistic updates, the play/pause debounce and the playback hold. Tests replace it.
     @ObservationIgnored var now: () -> Date = { Date() }
+
+    /// A play/pause request that comes less than this many seconds after the previous one is ignored:
+    /// a double click, a bouncing key. Skipping tracks is never debounced.
+    static let playPauseDebounce: TimeInterval = 0.4
+    /// How many seconds after a play/pause request a snapshot that contradicts it is treated as stale.
+    static let playbackHoldDuration: TimeInterval = 1.5
+
+    /// A play/pause request the player hasn't confirmed yet.
+    private struct PlaybackHold {
+        /// The state the request asked for.
+        var target: PlaybackState
+        /// The track it was made on.
+        var trackID: String
+        /// When the request stops outranking snapshots.
+        var until: Date
+    }
 
     private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "NowBar", category: "PlayerStore")
 
@@ -199,24 +220,45 @@ public final class PlayerStore {
     /// The actions below apply their optimistic change immediately and return the task that talks to the player,
     /// which callers can ignore (or await, as the tests do).
 
+    /// Pauses when the panel shows "playing" and plays otherwise: what the user sees is what they react to.
+    /// The player is told exactly that (`pause()` or `play()`, never a toggle), so a repeated request can't
+    /// flip playback back. A request that comes within `playPauseDebounce` of the previous one is ignored.
+    /// The button, the space bar and the media key all come through here.
     @discardableResult
     public func playPause() -> Task<Void, Never> {
         guard snapshot.availability == .running else { return Task {} }
-        if snapshot.track != nil {
-            let moment = now()
+        let moment = now()
+        if let last = lastPlayPauseRequest, moment.timeIntervalSince(last) < Self.playPauseDebounce {
+            Self.log.debug("Ignored a play/pause request that came right after the previous one")
+            return Task {}
+        }
+        lastPlayPauseRequest = moment
+
+        let shouldPlay = snapshot.state != .playing
+        if let track = snapshot.track {
             mutateSnapshot { snap in
-                switch snap.state {
-                case .playing:
+                if shouldPlay {
+                    snap.state = .playing
+                } else {
                     // Freeze the bar where it is.
                     snap.position = snap.position(at: moment)
                     snap.state = .paused
-                case .paused, .stopped:
-                    snap.state = .playing
                 }
                 snap.capturedAt = moment
             }
+            playbackHold = PlaybackHold(
+                target: shouldPlay ? .playing : .paused,
+                trackID: track.id,
+                until: moment.addingTimeInterval(Self.playbackHoldDuration)
+            )
         }
-        return Task { [player] in await player.playPause() }
+
+        if shouldPlay {
+            Self.log.info("play requested")
+            return Task { [player] in await player.play() }
+        }
+        Self.log.info("pause requested")
+        return Task { [player] in await player.pause() }
     }
 
     @discardableResult
@@ -297,9 +339,10 @@ public final class PlayerStore {
 
     // MARK: Snapshot handling
 
-    private func apply(_ new: PlayerSnapshot) {
+    private func apply(_ incoming: PlayerSnapshot) {
         stateEpoch &+= 1
         let previousID = snapshot.track?.id
+        let new = reconcile(incoming)
         if new != snapshot { snapshot = new }
         guard new.track?.id != previousID else { return }
         // The track changed: drop any load for the old one, then fetch the new artwork.
@@ -310,6 +353,31 @@ public final class PlayerStore {
         } else {
             artwork = nil
         }
+    }
+
+    /// Music can still answer "playing" for a moment after it was told to pause (and the other way round),
+    /// and the panel would flip back. So while a play/pause request is on hold, a snapshot for the same track
+    /// that contradicts it (a push or a poll alike) is treated as stale: the state, position and capture time
+    /// the request produced stay, and everything else (metadata, favorite, availability) comes from the snapshot.
+    ///
+    /// The hold ends when a snapshot confirms the request, when the track or the availability changes
+    /// (whatever the user asked for no longer applies), and when `playbackHoldDuration` runs out (Music
+    /// didn't do it, and the panel goes back to what Music says).
+    private func reconcile(_ incoming: PlayerSnapshot) -> PlayerSnapshot {
+        guard let hold = playbackHold else { return incoming }
+        guard now() < hold.until, incoming.availability == .running, incoming.track?.id == hold.trackID else {
+            playbackHold = nil
+            return incoming
+        }
+        guard incoming.state != hold.target else {
+            playbackHold = nil
+            return incoming
+        }
+        var held = incoming
+        held.state = snapshot.state
+        held.position = snapshot.position
+        held.capturedAt = snapshot.capturedAt
+        return held
     }
 
     private func mutateSnapshot(_ change: (inout PlayerSnapshot) -> Void) {

@@ -6,6 +6,17 @@ import NowBarCore
 
 struct TestError: Error {}
 
+/// A clock the test moves by hand. Set `PlayerStore.now` to `{ clock.current }` to control time.
+final class TestClock {
+    private(set) var current: Date
+
+    init(_ start: Date) { current = start }
+
+    func advance(by seconds: TimeInterval) {
+        current = current.addingTimeInterval(seconds)
+    }
+}
+
 /// A `PlayerController` that records calls and returns whatever the test sets up.
 @MainActor
 final class FakePlayer: PlayerController {
@@ -47,7 +58,8 @@ final class FakePlayer: PlayerController {
         return artworkByTrackID[track.id]
     }
 
-    func playPause() async { calls.append("playPause") }
+    func play() async { calls.append("play") }
+    func pause() async { calls.append("pause") }
     func nextTrack() async { calls.append("nextTrack") }
     func previousTrack() async { calls.append("previousTrack") }
     func seek(to seconds: TimeInterval) async { calls.append("seek(\(seconds))") }

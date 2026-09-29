@@ -45,6 +45,9 @@ public final class AppleMusicController: PlayerController {
 
     private static let playerInfoNotification = Notification.Name("com.apple.Music.playerInfo")
     private static let refreshDelay = Duration.milliseconds(150)
+    /// How long Music gets to apply a transport command before it is read again. It acknowledges a command a
+    /// moment before its player state changes, so an immediate read can still return the old state.
+    private static let transportSettleTime = Duration.milliseconds(250)
     private static let launchSettleTime = Duration.seconds(1)
 
     // MARK: PlayerController
@@ -94,16 +97,22 @@ public final class AppleMusicController: PlayerController {
         return bytes
     }
 
-    public func playPause() async {
-        await send("nb_playpause")
+    /// Sends Music's `play`, not its `playpause` toggle, so a repeated or late command can't flip playback back.
+    public func play() async {
+        await send("nb_play", settle: Self.transportSettleTime)
+    }
+
+    /// Sends Music's `pause`; see `play()`.
+    public func pause() async {
+        await send("nb_pause", settle: Self.transportSettleTime)
     }
 
     public func nextTrack() async {
-        await send("nb_next")
+        await send("nb_next", settle: Self.transportSettleTime)
     }
 
     public func previousTrack() async {
-        await send("nb_previous")
+        await send("nb_previous", settle: Self.transportSettleTime)
     }
 
     public func seek(to seconds: TimeInterval) async {
@@ -129,10 +138,16 @@ public final class AppleMusicController: PlayerController {
     // MARK: Actions
 
     /// Runs a control handler, then reads the player again and pushes the result through `onChange`.
-    private func send(_ handler: String, arguments: [ScriptArgument] = []) async {
+    /// After a command that Music accepted, waits `settle` before that read, so it doesn't see the old state.
+    private func send(_ handler: String, arguments: [ScriptArgument] = [], settle: Duration = .zero) async {
         if await prepare() == .ready {
             let result = await runner.call(handler, in: MusicScripts.control, arguments: arguments)
-            if let error = result.error { noteFailure(error, while: handler) }
+            if let error = result.error {
+                noteFailure(error, while: handler)
+            } else if settle > .zero {
+                // A cancelled wait just ends early; the read below still happens.
+                try? await Task.sleep(for: settle)
+            }
         }
         onChange?(await refresh())
     }

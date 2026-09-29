@@ -4,7 +4,9 @@
 #
 #   scripts/build-app.sh [--install] [--open] [--demo]
 #
-#   --install  also copy the app to ~/Applications/NowBar.app (quits a running NowBar first)
+#   --install  also copy the app to /Applications/NowBar.app (quits a running NowBar first). If /Applications
+#              isn't writable for you, it goes to ~/Applications/NowBar.app instead, and says so. An older
+#              copy in ~/Applications (where earlier versions installed) is then moved to the Trash.
 #   --open     launch the app afterwards: the installed copy with --install, otherwise build/NowBar.app
 #   --demo     launch with --demo (a fake playlist, no Music needed); implies --open
 #   -h, --help show this help
@@ -12,7 +14,8 @@
 # Environment:
 #   NOWBAR_BINARY       bundle this prebuilt executable instead of running `swift build`
 #   SIGN_IDENTITY       codesign identity to sign with (default: ad-hoc, "-")
-#   NOWBAR_INSTALL_DIR  where --install puts the app (default: ~/Applications)
+#   NOWBAR_INSTALL_DIR  where --install puts the app (default: /Applications, or ~/Applications when that
+#                       isn't writable). A folder set here is used as given, with no fallback.
 #
 # Works from any directory: it always operates on the repository this script lives in.
 
@@ -24,10 +27,13 @@ cd "$ROOT"
 
 APP_NAME="NowBar"
 APP="$ROOT/build/$APP_NAME.app"
-INSTALL_DIR="${NOWBAR_INSTALL_DIR:-$HOME/Applications}"
+SYSTEM_APPS_DIR="/Applications"
+USER_APPS_DIR="$HOME/Applications"
+INSTALL_DIR="${NOWBAR_INSTALL_DIR:-$SYSTEM_APPS_DIR}"
 IDENTITY="${SIGN_IDENTITY:--}"
 
 log() { printf '==> %s\n' "$*"; }
+warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 usage() {
@@ -105,17 +111,47 @@ quit_running() {
   die "$APP_NAME is still running after 10 seconds; quit it and try again"
 }
 
+# Earlier versions installed to ~/Applications. Once the new copy is in place, moves an old one there to the
+# Trash. It never deletes anything, and it does nothing when the old copy is the one just installed.
+# quit_running has already run, so the old copy isn't running.
+trash_old_copy() {
+  local old="$USER_APPS_DIR/$APP_NAME.app"
+  [[ -e "$old" ]] || return 0
+  if [[ "$old" -ef "$FINAL_APP" ]]; then return 0; fi   # -ef: the same directory, even through a symlink
+
+  local trash="$HOME/.Trash" target n=1
+  target="$trash/$APP_NAME.app"
+  # Something with that name may already be in the Trash: pick a free one ("NowBar 2.app", ...), never overwrite.
+  while [[ -e "$target" || -L "$target" ]]; do
+    n=$((n + 1))
+    target="$trash/$APP_NAME $n.app"
+  done
+  if mv "$old" "$target"; then
+    log "Moved the old copy $old to the Trash ($target)"
+  else
+    warn "could not move the old copy $old to the Trash; move it there yourself"
+  fi
+}
+
 FINAL_APP="$APP"
 if [[ $INSTALL -eq 1 || $OPEN -eq 1 ]]; then
   quit_running
 fi
 if [[ $INSTALL -eq 1 ]]; then
+  # Without admin rights an account can't write to /Applications. Fall back to ~/Applications, and say so.
+  # A folder chosen with NOWBAR_INSTALL_DIR is used as given: if it isn't writable, that is an error below.
+  if [[ -z "${NOWBAR_INSTALL_DIR:-}" && ! -w "$INSTALL_DIR" ]]; then
+    INSTALL_DIR="$USER_APPS_DIR"
+    log "$SYSTEM_APPS_DIR is not writable for $(id -un); installing to $INSTALL_DIR instead"
+  fi
   FINAL_APP="$INSTALL_DIR/$APP_NAME.app"
   log "Installing to $FINAL_APP"
   mkdir -p "$INSTALL_DIR"
+  [[ -w "$INSTALL_DIR" ]] || die "$INSTALL_DIR is not writable; choose another folder with NOWBAR_INSTALL_DIR"
   rm -rf "$FINAL_APP"
   ditto "$APP" "$FINAL_APP"
   codesign --verify --strict "$FINAL_APP" || die "codesign --verify failed for the installed copy $FINAL_APP"
+  trash_old_copy
 fi
 if [[ $OPEN -eq 1 ]]; then
   log "Opening $FINAL_APP"

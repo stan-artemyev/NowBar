@@ -79,19 +79,22 @@ struct OptimisticUpdateTests {
         #expect(snapshot.position(at: now.addingTimeInterval(60)) == 40)   // stays put
 
         await task.value
-        #expect(harness.player.calls.last == "playPause")
+        #expect(harness.player.calls.last == "pause")
     }
 
     @Test func resumingRestartsTheClockFromNow() async {
         let now = start
         let harness = harness(Fixture.running(.paused, position: 40, capturedAt: now.addingTimeInterval(-500)), now: now)
 
-        await harness.store.playPause().value
+        let task = harness.store.playPause()
         let snapshot = harness.store.snapshot
         #expect(snapshot.state == .playing)
         #expect(snapshot.position == 40)
         #expect(snapshot.capturedAt == now)
         #expect(snapshot.position(at: now.addingTimeInterval(5)) == 45)
+
+        await task.value
+        #expect(harness.player.calls.last == "play")
     }
 
     @Test func playPauseNeverTouchesAPlayerThatIsNotRunning() async {

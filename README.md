@@ -22,27 +22,32 @@ A macOS menu bar mini-player for Apple Music. Click the music note in the menu b
 
 ```sh
 make app       # release build, packaged and signed as build/NowBar.app
-make install   # the same, then installs to ~/Applications/NowBar.app and launches it
+make install   # the same, then installs to /Applications/NowBar.app and launches it
 ```
 
 Both use `scripts/build-app.sh`, which builds the `NowBar` product in release mode (for the architecture of the Mac you build on), assembles `build/NowBar.app` from the binary, `Resources/Info.plist` and `Resources/AppIcon.icns`, signs it and checks the signature with `codesign --verify --strict`. It works from any directory and prints the final app path and the signing identity it used.
 
 | Option or variable | Effect |
 | --- | --- |
-| `--install` | Also copy the app to `~/Applications/NowBar.app`, replacing any earlier copy. |
+| `--install` | Also copy the app to `/Applications/NowBar.app`, replacing any earlier copy. If `/Applications` isn't writable for your account (a standard user, say), it goes to `~/Applications/NowBar.app` instead and the script says so. |
 | `--open` | Launch the result: the installed copy with `--install`, otherwise `build/NowBar.app`. |
 | `--demo` | Launch with `--demo`; implies `--open`. |
 | `NOWBAR_BINARY=/path` | Bundle this prebuilt executable instead of running `swift build`. |
 | `SIGN_IDENTITY="..."` | Sign with this identity instead of ad-hoc. |
-| `NOWBAR_INSTALL_DIR=/path` | Install somewhere other than `~/Applications`. |
+| `NOWBAR_INSTALL_DIR=/path` | Install somewhere other than `/Applications`. The folder is used as given: if it isn't writable, the script stops with an error instead of falling back to `~/Applications`. |
 
 `--install` and `--open` first quit a running NowBar (`pkill -x NowBar`) and wait for it to exit. Otherwise the old build would keep running, and `open` would only bring it to the front and ignore `--demo`.
+
+Earlier versions installed to `~/Applications`. Once the new copy is in place, `--install` moves an old `~/Applications/NowBar.app` to the Trash (it never deletes it) and says so. If the move fails, the script warns and leaves the old copy where it is, so drag it to the Trash yourself. Nothing is moved when `~/Applications` is where the new copy went.
+
+Installing to a new location can make macOS ask for the Accessibility and Automation permissions again, just as a rebuild does: see First run and permissions.
 
 To uninstall:
 
 ```sh
 pkill -x NowBar                                  # if it is running
-rm -rf ~/Applications/NowBar.app
+rm -rf /Applications/NowBar.app                  # or drag it to the Trash
+rm -rf ~/Applications/NowBar.app                 # only if an earlier install or the fallback put it there
 defaults delete local.nowbar.NowBar              # saved settings (errors if there are none)
 tccutil reset AppleEvents local.nowbar.NowBar    # forget the Automation permission
 tccutil reset Accessibility local.nowbar.NowBar  # forget the Accessibility permission
@@ -58,7 +63,7 @@ NowBar needs two macOS permissions. It starts without either.
 
 **Accessibility (media keys).** Intercepting the media keys needs Accessibility permission. NowBar asks for it once. If you dismissed the request, open System Settings → Privacy & Security → Accessibility and switch NowBar on (use + to add it if it isn't listed). Without this permission the panel works as usual and the media keys keep going to macOS.
 
-**Rebuilds make macOS forget both grants.** `scripts/build-app.sh` signs ad-hoc by default, and an ad-hoc signature identifies the app only by a hash of its code (`codesign -d -r- build/NowBar.app` prints `designated => cdhash H"..."`). Every rebuild is therefore a different app to macOS, which forgets the Automation and Accessibility grants and can leave stale entries in the lists. After rebuilding, clear them and grant again when prompted:
+**Rebuilds and moves make macOS forget both grants.** `scripts/build-app.sh` signs ad-hoc by default, and an ad-hoc signature identifies the app only by a hash of its code (`codesign -d -r- build/NowBar.app` prints `designated => cdhash H"..."`). Every rebuild is therefore a different app to macOS, which forgets the Automation and Accessibility grants and can leave stale entries in the lists. Moving the app to a new location can do the same: for example, `make install` puts it in `/Applications`, so after an earlier install in `~/Applications` you grant both again. After rebuilding or moving the app, clear them and grant again when prompted:
 
 ```sh
 tccutil reset AppleEvents local.nowbar.NowBar
@@ -136,6 +141,8 @@ swift test -Xswiftc -plugin-path -Xswiftc /Library/Developer/CommandLineTools/us
 **The media keys still go to the browser or to macOS.** Check that NowBar is switched on under System Settings → Privacy & Security → Accessibility, that Media Keys Control Apple Music is on in the ⋯ menu, and that Music is running (with Music closed, macOS handles the keys). After a rebuild, run `tccutil reset Accessibility local.nowbar.NowBar`, relaunch NowBar and grant the permission again.
 
 **Nothing is playing and Play does nothing.** NowBar never launches Music on its own. Start it, or use ⋯ → Open Apple Music.
+
+**Clicking the star shows "To add songs and playlists to your Library, you must use Cloud Music Library".** That dialog is Apple Music's own, not NowBar's. Favoriting a song adds it to your library, which needs Sync Library to be on (Music → Settings → General), and Music's own star behaves the same way. Choose Merge Library to turn Sync Library on, or Not Now to skip it; the star then stays unfavorited. Sync Library covers your whole music library, not just NowBar, so turn it on only if you want that.
 
 **The artwork is a placeholder.** Apple Music doesn't expose artwork for some streamed tracks, so NowBar shows a placeholder. Known limitation.
 

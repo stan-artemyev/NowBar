@@ -49,21 +49,56 @@ struct DemoPlayerTests {
 
         player.start()
         #expect(pushed.count == 1)
-        await player.playPause()
+        await player.pause()
         #expect(pushed.count == 2)
         #expect(pushed.last?.state == .paused)
         player.stop()
     }
 
-    @Test func playPauseFreezesAndResumes() async {
+    @Test func pauseFreezesAndPlayResumes() async {
         let player = DemoPlayerController(availability: .running, state: .playing, position: 30, capturedAt: Date().addingTimeInterval(-10))
-        await player.playPause()
+        await player.pause()
         let paused = await player.refresh()
         #expect(paused.state == .paused)
         #expect(abs(paused.position - 40) < 1)   // 30 s plus the 10 s that passed
 
-        await player.playPause()
+        await player.play()
         #expect(await player.refresh().state == .playing)
+    }
+
+    @Test func playAndPauseAreIdempotent() async {
+        // Already paused: pausing again changes nothing.
+        let paused = DemoPlayerController(availability: .running, state: .paused, position: 50, capturedAt: now)
+        let pausedBefore = await paused.refresh()
+        await paused.pause()
+        #expect(await paused.refresh() == pausedBefore)
+
+        // Already playing: playing again changes nothing (in particular the position isn't re-anchored).
+        let playing = DemoPlayerController(availability: .running, state: .playing, position: 50, capturedAt: now)
+        let playingBefore = await playing.refresh()
+        await playing.play()
+        #expect(await playing.refresh() == playingBefore)
+    }
+
+    @Test func aRepeatedPlayOrPauseStillReports() async {
+        // The contract: `onChange` is called after every action completes.
+        let player = DemoPlayerController(availability: .running, state: .paused, position: 50, capturedAt: now)
+        var pushed: [PlayerSnapshot] = []
+        player.onChange = { pushed.append($0) }
+
+        await player.pause()
+        await player.pause()
+        #expect(pushed.count == 2)
+        #expect(pushed.allSatisfy { $0.state == .paused })
+    }
+
+    @Test func playingFromStoppedStartsTheFirstTrack() async {
+        let player = DemoPlayerController(availability: .running, state: .stopped)
+        await player.play()
+        let snapshot = await player.refresh()
+        #expect(snapshot.state == .playing)
+        #expect(snapshot.track?.title == "Midnight Circuit")
+        #expect(snapshot.position == 0)
     }
 
     @Test func nextWrapsAroundThePlaylist() async {
@@ -125,7 +160,8 @@ struct DemoPlayerTests {
 
     @Test func actionsDoNothingWhileTheAppIsClosed() async {
         let player = DemoPlayerController(availability: .notRunning, state: .stopped)
-        await player.playPause()
+        await player.play()
+        await player.pause()
         await player.nextTrack()
         await player.setFavorited(true)
         #expect(await player.refresh() == .notRunning)

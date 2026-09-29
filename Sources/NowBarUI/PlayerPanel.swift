@@ -96,6 +96,8 @@ public struct PlayerPanel: View {
         .background {
             if !renderContext.isSnapshot {
                 WindowKeyObserver { store.isPanelVisible = $0 }
+                // The layout switch resizes the window; this keeps its top edge under the menu bar.
+                WindowTopAnchor()
             }
         }
         .focusable()

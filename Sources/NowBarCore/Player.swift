@@ -95,7 +95,10 @@ public protocol PlayerController: AnyObject {
     /// Artwork image data (any format NSImage reads) for `track`, or nil when unavailable.
     func artwork(for track: Track) async -> Data?
 
-    func playPause() async
+    /// Starts or resumes playback. Idempotent: a repeat while already playing changes nothing.
+    func play() async
+    /// Pauses playback. Idempotent: a repeat while already paused changes nothing.
+    func pause() async
     func nextTrack() async
     /// Restarts the current track, or goes to the previous one when near its start (Music's "back track").
     func previousTrack() async

@@ -5,7 +5,7 @@ import NowBarCore
 /// - runs inside `with timeout of 3 seconds`, so an unresponsive Music can't stall the script queue for two minutes.
 ///
 /// The terms come from Music's own scripting dictionary (`player state`, `current track`, `persistent ID`,
-/// `favorited`, `raw data`, `playpause`, `next track`, `back track`).
+/// `favorited`, `raw data`, `play`, `pause`, `next track`, `back track`).
 enum MusicScripts {
     // Failures that mean "stop now" (Music quit, isn't answering, or we aren't allowed) are re-raised so one
     // timeout doesn't turn into one timeout per property. Any other failure only leaves that property empty:
@@ -112,14 +112,28 @@ enum MusicScripts {
     """
 
     /// The transport and favorite commands. Positions and flags arrive as typed arguments.
+    ///
+    /// Play and pause are two commands, never Music's `playpause` toggle: a repeated or late toggle flips
+    /// playback back, while `play` while playing and `pause` while paused change nothing.
     static let control = """
-    on nb_playpause()
+    on nb_play()
         with timeout of 3 seconds
             if application id "\(MusicApp.bundleIdentifier)" is running then
-                tell application id "\(MusicApp.bundleIdentifier)" to playpause
+                tell application id "\(MusicApp.bundleIdentifier)"
+                    -- Only when not already playing, so a stale request can never restart the track.
+                    if player state is not playing then play
+                end tell
             end if
         end timeout
-    end nb_playpause
+    end nb_play
+
+    on nb_pause()
+        with timeout of 3 seconds
+            if application id "\(MusicApp.bundleIdentifier)" is running then
+                tell application id "\(MusicApp.bundleIdentifier)" to pause
+            end if
+        end timeout
+    end nb_pause
 
     on nb_next()
         with timeout of 3 seconds

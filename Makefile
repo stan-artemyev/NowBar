@@ -21,7 +21,7 @@ build: ## Debug build of every target
 app: ## Release build, packaged and signed as build/NowBar.app
 	scripts/build-app.sh
 
-install: ## Build, install to ~/Applications/NowBar.app and launch it
+install: ## Build, install to /Applications/NowBar.app and launch it
 	scripts/build-app.sh --install --open
 
 demo: ## Build and launch build/NowBar.app with a fake playlist (no Music needed)
