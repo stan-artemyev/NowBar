@@ -1,0 +1,13 @@
+.DS_Store
+/.build/
+/build/
+/.swiftpm/
+xcuserdata/
+/.build-*/
+
+# Xcode build products, debug symbols and editor state
+DerivedData/
+*.dSYM/
+.idea/
+.vscode/
+*.swp
