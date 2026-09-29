@@ -63,7 +63,7 @@ final class FakePlayer: PlayerController {
     func nextTrack() async { calls.append("nextTrack") }
     func previousTrack() async { calls.append("previousTrack") }
     func seek(to seconds: TimeInterval) async { calls.append("seek(\(seconds))") }
-    func setFavorited(_ favorited: Bool) async { calls.append("setFavorited(\(favorited))") }
+    func setFavorited(_ favorited: Bool, trackID: String) async { calls.append("setFavorited(\(favorited), trackID: \(trackID))") }
     func openApp() { calls.append("openApp") }
 
     /// What the real controller does after a track or state change: push a snapshot.
@@ -152,17 +152,76 @@ enum Fixture {
 
     /// A solid PNG of the given pixel size, to tell artwork apart by size.
     static func png(size: Int) -> Data {
+        image(size: size, type: "public.png")
+    }
+
+    /// A solid square image of the given pixel size in the format `type` names ("public.jpeg", "com.compuserve.gif"…).
+    static func image(size: Int, type: String) -> Data {
+        image(width: size, height: size, type: type)
+    }
+
+    /// A solid image of the given pixel size in the format `type` names. A flat colour packs into a small file
+    /// even when the image is thousands of pixels wide.
+    static func image(width: Int, height: Int, type: String) -> Data {
         let context = CGContext(
-            data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
             space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         )!
         context.setFillColor(CGColor(red: 0.9, green: 0.2, blue: 0.3, alpha: 1))
-        context.fill(CGRect(x: 0, y: 0, width: size, height: size))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         let data = NSMutableData()
-        let destination = CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil)!
+        let destination = CGImageDestinationCreateWithData(data, type as CFString, 1, nil)!
         CGImageDestinationAddImage(destination, context.makeImage()!, nil)
         CGImageDestinationFinalize(destination)
         return data as Data
+    }
+
+    /// A tiny PNG whose header claims a `width` x `height` image. Only the header is edited (and its checksum
+    /// redone to match): the pixels are still those of an 8 x 8 image, so nothing could decode it at that size.
+    static func png(declaringWidth width: Int, height: Int) -> Data {
+        var bytes = [UInt8](png(size: 8))
+        // After the 8-byte signature comes the IHDR chunk: its length (4 bytes), "IHDR" (4), the width (4), the
+        // height (4), five more header bytes, and the CRC of everything from "IHDR" on (4).
+        precondition(bytes.count > 33 && Array(bytes[12..<16]) == Array("IHDR".utf8), "not a PNG that starts with IHDR")
+        func put(_ value: UInt32, at offset: Int) {
+            for index in 0..<4 { bytes[offset + index] = UInt8(truncatingIfNeeded: value >> UInt32(24 - 8 * index)) }
+        }
+        put(UInt32(width), at: 16)
+        put(UInt32(height), at: 20)
+        put(crc32(bytes[12..<29]), at: 29)
+        return Data(bytes)
+    }
+
+    /// The CRC-32 that PNG uses.
+    static func crc32(_ bytes: ArraySlice<UInt8>) -> UInt32 {
+        var crc: UInt32 = 0xFFFF_FFFF
+        for byte in bytes {
+            crc ^= UInt32(byte)
+            for _ in 0..<8 { crc = crc & 1 == 1 ? (crc >> 1) ^ 0xEDB8_8320 : crc >> 1 }
+        }
+        return ~crc
+    }
+
+    /// A valid one-page PDF: a red square on a 100 pt page. ImageIO renders it as a 100 x 100 bitmap if asked.
+    static func pdf() -> Data {
+        let content = "0.9 0.2 0.3 rg 10 10 80 80 re f"
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >>",
+            "<< /Length \(content.utf8.count) >>\nstream\n\(content)\nendstream",
+        ]
+        var file = "%PDF-1.4\n"
+        var offsets: [Int] = []
+        for (index, body) in objects.enumerated() {
+            offsets.append(file.utf8.count)
+            file += "\(index + 1) 0 obj\n\(body)\nendobj\n"
+        }
+        let xref = file.utf8.count
+        file += "xref\n0 \(objects.count + 1)\n0000000000 65535 f \n"
+        for offset in offsets { file += String(format: "%010d 00000 n \n", offset) }
+        file += "trailer\n<< /Size \(objects.count + 1) /Root 1 0 R >>\nstartxref\n\(xref)\n%%EOF\n"
+        return Data(file.utf8)
     }
 }
 

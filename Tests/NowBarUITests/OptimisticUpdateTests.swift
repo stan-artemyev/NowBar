@@ -24,7 +24,7 @@ struct OptimisticUpdateTests {
         #expect(harness.store.snapshot.track?.isFavorited == true)   // already, before the player call finished
 
         await task.value
-        #expect(harness.player.calls.last == "setFavorited(true)")
+        #expect(harness.player.calls.last == "setFavorited(true, trackID: t1)")   // the id of `Fixture.track`
     }
 
     @Test func favoriteTogglesBackOff() async {
@@ -32,7 +32,7 @@ struct OptimisticUpdateTests {
 
         await harness.store.toggleFavorite().value
         #expect(harness.store.snapshot.track?.isFavorited == false)
-        #expect(harness.player.calls.last == "setFavorited(false)")
+        #expect(harness.player.calls.last == "setFavorited(false, trackID: t)")
     }
 
     @Test func favoriteLeavesTheRestOfTheSnapshotAlone() async {

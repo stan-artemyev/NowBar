@@ -92,7 +92,7 @@ public protocol PlayerController: AnyObject {
     /// Returns `.notRunning` without sending any Apple Event when the app isn't running.
     func refresh() async -> PlayerSnapshot
 
-    /// Artwork image data (any format NSImage reads) for `track`, or nil when unavailable.
+    /// Artwork image data (a bitmap format ImageIO reads) for `track`, or nil when unavailable.
     func artwork(for track: Track) async -> Data?
 
     /// Starts or resumes playback. Idempotent: a repeat while already playing changes nothing.
@@ -103,7 +103,9 @@ public protocol PlayerController: AnyObject {
     /// Restarts the current track, or goes to the previous one when near its start (Music's "back track").
     func previousTrack() async
     func seek(to seconds: TimeInterval) async
-    func setFavorited(_ favorited: Bool) async
+    /// Sets the favorite flag of the track with id `trackID`, only while it is still the current track,
+    /// so a click that races a track change never favorites the next song.
+    func setFavorited(_ favorited: Bool, trackID: String) async
 
     /// Launches the music app if needed and brings it to the front. Only called from an explicit user action.
     func openApp()

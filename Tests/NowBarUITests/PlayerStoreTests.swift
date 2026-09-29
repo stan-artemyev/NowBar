@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ImageIO
 import NowBarCore
 import Testing
 @testable import NowBarUI
@@ -453,5 +454,95 @@ struct ArtworkTests {
         #expect(await ArtworkDecoder.decode(Data("not an image".utf8)) == nil)
         #expect(await ArtworkDecoder.decode(Data()) == nil)
         #expect(await ArtworkDecoder.decode(nil) == nil)
+    }
+
+    // The artwork bytes are decoded here, off the main thread, and no longer by the controller. (Whether they are
+    // a whole image is the controller's check before it caches them, `ArtworkCompleteness`: ImageIO happily
+    // decodes a PNG or a JPEG that is cut off in its pixel data, as far as it goes.)
+
+    @Test func ignoresAnImageThatIsCutOffBeforeItsPixels() async {
+        let png = Fixture.png(size: 32)
+        #expect(await ArtworkDecoder.decode(png) != nil)
+        #expect(await ArtworkDecoder.decode(Data(png.prefix(20))) == nil)
+        #expect(await ArtworkDecoder.decode(Data(png.prefix(png.count / 2))) == nil)   // inside the header chunks
+    }
+
+    @Test func ignoresAPDFEvenThoughImageIOCanRenderOne() async {
+        // ImageIO turns the first page of a PDF into a bitmap. Artwork is never a document, and `NSImage(data:)`,
+        // which the controller used to run on the main thread, accepted PDF too.
+        let pdf = Fixture.pdf()
+        #expect(pdf.starts(with: Data("%PDF".utf8)))
+        #expect(await ArtworkDecoder.decode(pdf) == nil)
+        #expect(ArtworkDecoder.makeCGImage(from: pdf) == nil)
+    }
+
+    @Test func decodesTheCommonBitmapFormats() async {
+        for type in ["public.png", "public.jpeg", "public.tiff", "com.compuserve.gif"] {
+            let image = await ArtworkDecoder.decode(Fixture.image(size: 40, type: type))
+            #expect(image?.size.width == 40, "\(type)")
+        }
+    }
+
+    // A small file can declare a canvas of billions of pixels, which would expand into gigabytes when decoded.
+
+    @Test func theSizeLimitIsTenThousandPixelsASide() {
+        #expect(ArtworkDecoder.maxSourceDimension == 10_000)
+    }
+
+    @Test func decodesAnImageAtTheSizeLimit() async {
+        let limit = ArtworkDecoder.maxSourceDimension
+        #expect(await ArtworkDecoder.decode(Fixture.image(width: limit, height: 100, type: "public.png")) != nil)
+        #expect(await ArtworkDecoder.decode(Fixture.image(width: 100, height: limit, type: "public.png")) != nil)
+    }
+
+    @Test func ignoresAnImageOnePixelOverTheSizeLimitOnEitherSide() async {
+        // Valid images that ImageIO would decode without a limit, so it is the limit that refuses them.
+        let limit = ArtworkDecoder.maxSourceDimension
+        #expect(await ArtworkDecoder.decode(Fixture.image(width: limit + 1, height: 100, type: "public.png")) == nil)
+        #expect(await ArtworkDecoder.decode(Fixture.image(width: 100, height: limit + 1, type: "public.png")) == nil)
+        #expect(await ArtworkDecoder.decode(Fixture.image(width: limit + 1, height: limit + 1, type: "public.png")) == nil)
+    }
+
+    @Test func ignoresAHeaderThatClaimsAHugeImage() async {
+        // A file of a few hundred bytes whose header says 60,000 x 60,000 pixels: a decompression bomb, if
+        // anything believed it. (ImageIO gives no size for a header like that, which counts as unreadable below;
+        // the limit is what turns away a valid image that really is that big.)
+        let bomb = Fixture.png(declaringWidth: 60_000, height: 60_000)
+        #expect(bomb.count < 1_000)
+        #expect(ArtworkDecoder.makeCGImage(from: bomb) == nil)
+        #expect(await ArtworkDecoder.decode(bomb) == nil)
+    }
+
+    /// The properties ImageIO gives for an image, with only the sizes that are given.
+    func properties(width: Int?, height: Int?) -> [CFString: Any] {
+        var result: [CFString: Any] = [:]
+        if let width { result[kCGImagePropertyPixelWidth] = width }
+        if let height { result[kCGImagePropertyPixelHeight] = height }
+        return result
+    }
+
+    @Test func theSizeLimitIsAppliedToTheSizeInTheProperties() {
+        let limit = ArtworkDecoder.maxSourceDimension
+        #expect(ArtworkDecoder.isWithinSizeLimit(properties(width: 640, height: 640)))
+        #expect(ArtworkDecoder.isWithinSizeLimit(properties(width: limit, height: limit)))
+        // Either side over the limit, however small the other is.
+        #expect(!ArtworkDecoder.isWithinSizeLimit(properties(width: limit + 1, height: 1)))
+        #expect(!ArtworkDecoder.isWithinSizeLimit(properties(width: 1, height: limit + 1)))
+        #expect(!ArtworkDecoder.isWithinSizeLimit(properties(width: 60_000, height: 60_000)))   // the bomb's header
+    }
+
+    @Test func aHeaderWithoutASizeIsNotDecoded() {
+        #expect(!ArtworkDecoder.isWithinSizeLimit(nil))                              // ImageIO gave no properties at all
+        #expect(!ArtworkDecoder.isWithinSizeLimit([:]))
+        #expect(!ArtworkDecoder.isWithinSizeLimit(properties(width: 640, height: nil)))
+        #expect(!ArtworkDecoder.isWithinSizeLimit(properties(width: nil, height: 640)))
+    }
+
+    @Test func aPNGWithItsOwnSizeWrittenBackIsUnchanged() async {
+        // Checks the fixture above: with the size it already had, editing the header gives back the same file, so
+        // the checksum it redoes is the right one. (Any other size makes ImageIO refuse the file, whatever the limit.)
+        let rewritten = Fixture.png(declaringWidth: 8, height: 8)
+        #expect(rewritten == Fixture.png(size: 8))
+        #expect(await ArtworkDecoder.decode(rewritten)?.size.width == 8)
     }
 }

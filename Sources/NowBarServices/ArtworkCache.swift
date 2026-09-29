@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 
 /// Remembers the artwork bytes of the most recently used tracks, so going back to a track doesn't ask Music again.
@@ -31,14 +30,5 @@ struct ArtworkCache {
     private mutating func touch(_ id: String) {
         order.removeAll { $0 == id }
         order.append(id)
-    }
-}
-
-enum ArtworkImage {
-    /// True when NSImage can decode `data`. `NSImage(data:)` accepts truncated files, so this also requires the
-    /// image to be valid and to have a size.
-    static func isDecodable(_ data: Data) -> Bool {
-        guard !data.isEmpty, let image = NSImage(data: data) else { return false }
-        return image.isValid && image.size.width > 0 && image.size.height > 0
     }
 }

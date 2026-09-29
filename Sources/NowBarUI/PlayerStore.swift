@@ -4,6 +4,7 @@ import ImageIO
 import NowBarCore
 import Observation
 import os
+import UniformTypeIdentifiers
 
 /// The single source of truth for the panel and the menu bar label.
 ///
@@ -50,7 +51,8 @@ public final class PlayerStore {
             do {
                 try launchAtLoginService.setEnabled(launchAtLogin)
             } catch {
-                Self.log.error("Could not \(self.launchAtLogin ? "enable" : "disable") launch at login: \(error.localizedDescription, privacy: .public)")
+                // The words "enable" and "disable" are ours; the system's error text isn't, so it stays private.
+                Self.log.error("Could not \(self.launchAtLogin ? "enable" : "disable", privacy: .public) launch at login: \(error.localizedDescription)")
                 isSyncingLaunchAtLogin = true
                 launchAtLogin = oldValue
                 isSyncingLaunchAtLogin = false
@@ -304,10 +306,11 @@ public final class PlayerStore {
     }
 
     /// Favorites the track when the panel shows it as not a favorite and unfavorites it otherwise: like play/pause,
-    /// what the user sees is what they react to, and the player is told exactly that (`setFavorited(true)` or
-    /// `(false)`, never a toggle). The star changes at once and stays that way while Music catches up (see
-    /// `reconcile(_:)`). A click while an earlier one is still on hold reads the star as it is displayed, so it
-    /// undoes the first, and the hold follows it. The star isn't debounced.
+    /// what the user sees is what they react to, and the player is told exactly that (`setFavorited(true, …)` or
+    /// `(false, …)`, never a toggle). The request names the track that was on display at the click, so if Music
+    /// has moved on by the time it arrives, the next song isn't favorited instead. The star changes at once and
+    /// stays that way while Music catches up (see `reconcile(_:)`). A click while an earlier one is still on hold
+    /// reads the star as it is displayed, so it undoes the first, and the hold follows it. The star isn't debounced.
     @discardableResult
     public func toggleFavorite() -> Task<Void, Never> {
         guard snapshot.availability == .running, let track = snapshot.track else { return Task {} }
@@ -323,7 +326,8 @@ public final class PlayerStore {
         } else {
             Self.log.info("unfavorite requested")
         }
-        return Task { [player] in await player.setFavorited(favorited) }
+        let trackID = track.id
+        return Task { [player] in await player.setFavorited(favorited, trackID: trackID) }
     }
 
     public func openMusic() {
@@ -530,9 +534,15 @@ public final class PlayerStore {
 }
 
 /// Decodes artwork off the main thread and shrinks oversized images to what the panel can show.
+///
+/// The bytes come from a track's own metadata, so they are untrusted: whatever isn't a readable bitmap image
+/// (garbage, a PDF, a picture that claims a huge size) gives nil, and the panel shows its placeholder.
 enum ArtworkDecoder {
     /// 272 pt at 2x, with a little headroom.
     static let maxPixelSize = 640
+    /// The most pixels a source image may have along either side. A small file can declare a canvas of billions
+    /// of pixels, which would expand into gigabytes when decoded.
+    static let maxSourceDimension = 10_000
 
     static func decode(_ data: Data?) async -> NSImage? {
         guard let data, !data.isEmpty else { return nil }
@@ -542,7 +552,8 @@ enum ArtworkDecoder {
     }
 
     nonisolated static func makeCGImage(from data: Data) -> CGImage? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil), isBitmapImage(source),
+              isWithinSizeLimit(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -550,5 +561,21 @@ enum ArtworkDecoder {
             kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
         ]
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    /// ImageIO also renders the first page of a PDF, and artwork is never a document: only image types pass.
+    private nonisolated static func isBitmapImage(_ source: CGImageSource) -> Bool {
+        guard let identifier = CGImageSourceGetType(source), let type = UTType(identifier as String) else { return false }
+        return type.conforms(to: .image)
+    }
+
+    /// Whether the size that ImageIO's `properties` for an image give, read from its header before any pixels
+    /// are decoded, is within `maxSourceDimension` on both sides. Properties without a width and a height can't
+    /// be checked, so they don't pass.
+    nonisolated static func isWithinSizeLimit(_ properties: [CFString: Any]?) -> Bool {
+        guard let properties,
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int else { return false }
+        return width <= maxSourceDimension && height <= maxSourceDimension
     }
 }

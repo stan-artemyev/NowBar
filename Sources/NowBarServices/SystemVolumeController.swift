@@ -123,10 +123,14 @@ public final class SystemVolumeController: SystemVolumeControlling {
     /// Moves the volume and mute listeners to `device`, the current default output.
     private func bind(to device: AudioObjectID) {
         removeDeviceListeners()
-        // A mute we faked belongs to the old device; give it its volume back so it isn't stuck at 0.
+        // A mute we faked belongs to the old device; give it its volume back so it isn't stuck at 0. But only
+        // while it is still silent: if its volume was changed since (with its own controls, say), that level is
+        // the user's choice now, and the remembered one is just forgotten.
         if let emulated = emulatedMute, emulated.device != device {
-            _ = HAL.write(emulated.device, HAL.volumeAddress, Float32(emulated.restoreLevel))
             emulatedMute = nil
+            if let level = HAL.read(emulated.device, HAL.volumeAddress, as: Float32.self), level <= HAL.silence {
+                _ = HAL.write(emulated.device, HAL.volumeAddress, Float32(emulated.restoreLevel))
+            }
         }
         boundDevice = device
         guard device != HAL.unknownDevice else { return }

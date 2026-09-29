@@ -35,16 +35,22 @@ public final class AppleMusicController: PlayerController {
     private var permission = Permission.unknown
     /// The last successful reading, shown again if Music fails to answer once (a timeout, say).
     private var lastReading: PlayerSnapshot?
-    private var artworkCache = ArtworkCache(capacity: 8)
+    private(set) var artworkCache = ArtworkCache(capacity: 8)
     /// Music isn't scriptable the instant it launches: no script is sent before this.
     private var scriptableAfter: ContinuousClock.Instant?
     private var debounceTask: Task<Void, Never>?
+    /// Lets one refresh run at a time (see `refreshAndPush()`).
+    private var refreshGate = RefreshGate()
     private var playerInfoObserver: DistributedNotificationObserver?
     private var workspaceObservers: [NSObjectProtocol] = []
     private var lastLoggedError: Int?
 
     private static let playerInfoNotification = Notification.Name("com.apple.Music.playerInfo")
     private static let refreshDelay = Duration.milliseconds(150)
+    /// The most artwork data NowBar takes from Music, in bytes (10 MiB). Real covers are a few MB at most. The
+    /// bytes come from the track's own metadata, so anything can be in there, and up to eight are kept in memory
+    /// (80 MiB at most).
+    nonisolated static let maxArtworkBytes = 10 * 1024 * 1024
     /// How long Music gets to apply a transport command before it is read again. It acknowledges a command a
     /// moment before its player state changes, so an immediate read can still return the old state.
     private static let transportSettleTime = Duration.milliseconds(250)
@@ -64,6 +70,8 @@ public final class AppleMusicController: PlayerController {
         isStarted = false
         debounceTask?.cancel()
         debounceTask = nil
+        // A refresh that is already running still ends, but no trailing one follows it.
+        refreshGate.dropPending()
         if let playerInfoObserver {
             DistributedNotificationCenter.default().removeObserver(playerInfoObserver)
         }
@@ -91,10 +99,33 @@ public final class AppleMusicController: PlayerController {
             noteFailure(error, while: "reading artwork")
             return nil
         }
-        // No artwork is normal (streamed tracks often have none), and so is data that isn't an image.
-        guard case .data(let bytes) = result.value, ArtworkImage.isDecodable(bytes) else { return nil }
-        artworkCache.store(bytes, for: track.id)
+        // No artwork is normal (streamed tracks often have none).
+        guard case .data(let bytes) = result.value else { return nil }
+        return await acceptArtwork(bytes, for: track.id)
+    }
+
+    /// Keeps `bytes` as the artwork of the track `trackID` and returns them, unless they can't be used: more than
+    /// `maxArtworkBytes`, or not a whole bitmap image. Then it returns nil and caches nothing, so a cover that
+    /// was only partly there is asked for again next time.
+    ///
+    /// The bytes aren't decoded here, on the main thread that also serves the media key tap: the store does
+    /// that off it (`ArtworkDecoder`). Only their container is checked, and that happens off the main thread too.
+    /// `check` is `ArtworkCompleteness.isComplete` outside of tests.
+    func acceptArtwork(
+        _ bytes: Data,
+        for trackID: String,
+        checking check: @escaping @Sendable (Data) -> Bool = { ArtworkCompleteness.isComplete($0) }
+    ) async -> Data? {
+        guard Self.isAcceptableArtwork(bytes) else { return nil }
+        let isComplete = await Task.detached(priority: .userInitiated) { check(bytes) }.value
+        guard isComplete else { return nil }
+        artworkCache.store(bytes, for: trackID)
         return bytes
+    }
+
+    /// True when `bytes` are worth checking further: some data, and no more than `maxArtworkBytes`.
+    nonisolated static func isAcceptableArtwork(_ bytes: Data) -> Bool {
+        !bytes.isEmpty && bytes.count <= maxArtworkBytes
     }
 
     /// Sends Music's `play`, not its `playpause` toggle, so a repeated or late command can't flip playback back.
@@ -120,8 +151,9 @@ public final class AppleMusicController: PlayerController {
         await send("nb_seek", arguments: [.number(max(0, seconds))])
     }
 
-    public func setFavorited(_ favorited: Bool) async {
-        await send("nb_favorite", arguments: [.bool(favorited)])
+    /// The script only sets the flag if the current track's persistent ID still equals `trackID`, like `artwork(for:)`.
+    public func setFavorited(_ favorited: Bool, trackID: String) async {
+        await send("nb_favorite", arguments: [.bool(favorited), .text(trackID)])
     }
 
     public func openApp() {
@@ -130,7 +162,8 @@ public final class AppleMusicController: PlayerController {
         configuration.activates = true
         NSWorkspace.shared.openApplication(at: url, configuration: configuration) { _, error in
             if let error {
-                musicLog.error("Could not open Music: \(error.localizedDescription, privacy: .public)")
+                // The system's error text isn't ours, so it stays private (the default).
+                musicLog.error("Could not open Music: \(error.localizedDescription)")
             }
         }
     }
@@ -253,7 +286,9 @@ public final class AppleMusicController: PlayerController {
         // The same failure repeats on every refresh; log it once.
         guard lastLoggedError != error.number else { return }
         lastLoggedError = error.number
-        musicLog.error("Music script failed while \(activity, privacy: .public): \(error.message, privacy: .public) (\(error.number))")
+        // `activity` is one of our own fixed strings and the error number is a number, so both can be public.
+        // The message is Music's own text, which can quote a track's name: it stays private (the default).
+        musicLog.error("Music script failed while \(activity, privacy: .public): \(error.message) (\(error.number))")
     }
 
     // MARK: Observers
@@ -298,12 +333,17 @@ public final class AppleMusicController: PlayerController {
         }
     }
 
+    /// Reads the player and pushes the result, one refresh at a time. Any process can post the notification
+    /// that leads here, and Music can take seconds to answer, so requests must not pile up on the script queue:
+    /// one that arrives while a refresh runs is remembered, and exactly one more refresh follows that one.
     private func refreshAndPush() {
-        guard isStarted else { return }
+        guard isStarted, refreshGate.request() else { return }
         Task { [weak self] in
-            guard let self else { return }
-            let snapshot = await self.refresh()
-            if self.isStarted { self.onChange?(snapshot) }
+            while let self {
+                let snapshot = await self.refresh()
+                if self.isStarted { self.onChange?(snapshot) }
+                guard self.refreshGate.finish() else { return }
+            }
         }
     }
 

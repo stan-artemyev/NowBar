@@ -11,3 +11,6 @@ DerivedData/
 .idea/
 .vscode/
 *.swp
+
+# Claude Code's local settings and scratch files
+.claude/

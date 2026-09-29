@@ -111,10 +111,13 @@ enum MusicScripts {
     end nb_artwork
     """
 
-    /// The transport and favorite commands. Positions and flags arrive as typed arguments.
+    /// The transport and favorite commands. Positions, flags and track IDs arrive as typed arguments.
     ///
     /// Play and pause are two commands, never Music's `playpause` toggle: a repeated or late toggle flips
     /// playback back, while `play` while playing and `pause` while paused change nothing.
+    ///
+    /// `nb_favorite(shouldFavorite, expectedID)` only touches the current track if its persistent ID is
+    /// `expectedID`, so a click that races a track change never favorites the next song.
     static let control = """
     on nb_play()
         with timeout of 3 seconds
@@ -159,10 +162,15 @@ enum MusicScripts {
         end timeout
     end nb_seek
 
-    on nb_favorite(shouldFavorite)
+    on nb_favorite(shouldFavorite, expectedID)
         with timeout of 3 seconds
             if application id "\(MusicApp.bundleIdentifier)" is running then
-                tell application id "\(MusicApp.bundleIdentifier)" to set favorited of current track to shouldFavorite
+                tell application id "\(MusicApp.bundleIdentifier)"
+                    -- Only the track the user clicked on. The ID check and the write use the same track
+                    -- reference, so a track change in between can't redirect the write to the next song.
+                    set t to current track
+                    if (persistent ID of t) is expectedID then set favorited of t to shouldFavorite
+                end tell
             end if
         end timeout
     end nb_favorite

@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 import Testing
 import NowBarCore
@@ -284,24 +283,35 @@ import NowBarCore
     }
 }
 
-@Suite struct ArtworkImageTests {
-    func imageData(_ type: NSBitmapImageRep.FileType) -> Data {
-        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 8, pixelsHigh: 8, bitsPerSample: 8, samplesPerPixel: 4,
-                                   hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
-        return rep.representation(using: type, properties: [:])!
+/// The controller no longer parses artwork (that happened on the main thread, which also serves the media key
+/// tap): the store decodes it off the main thread. Before it is kept, its size is limited, and its container is
+/// checked off the main thread as well (see `ArtworkCompletenessTests`).
+@Suite struct ArtworkLimitTests {
+    let limit = AppleMusicController.maxArtworkBytes
+
+    @Test func theLimitIsTenMebibytes() {
+        #expect(limit == 10 * 1024 * 1024)
     }
 
-    @Test func acceptsRealImages() {
-        #expect(ArtworkImage.isDecodable(imageData(.png)))
-        #expect(ArtworkImage.isDecodable(imageData(.jpeg)))
-        #expect(ArtworkImage.isDecodable(imageData(.tiff)))
+    @Test func acceptsArtworkUpToTheLimit() {
+        #expect(AppleMusicController.isAcceptableArtwork(Data([0x89])))
+        #expect(AppleMusicController.isAcceptableArtwork(Data(count: 512 * 1024)))
+        #expect(AppleMusicController.isAcceptableArtwork(Data(count: limit)))   // exactly at the limit
     }
 
-    @Test func rejectsEverythingElse() {
-        #expect(!ArtworkImage.isDecodable(Data()))
-        #expect(!ArtworkImage.isDecodable(Data([1, 2, 3, 4, 5, 6, 7, 8])))
-        #expect(!ArtworkImage.isDecodable(Data("not an image".utf8)))
-        // NSImage(data:) accepts a truncated file; the artwork must not.
-        #expect(!ArtworkImage.isDecodable(imageData(.png).prefix(20)))
+    @Test func rejectsArtworkOverTheLimit() {
+        #expect(!AppleMusicController.isAcceptableArtwork(Data(count: limit + 1)))
+        #expect(!AppleMusicController.isAcceptableArtwork(Data(count: limit * 2)))
+    }
+
+    @Test func rejectsEmptyData() {
+        // Kept out of the cache too, so a track whose artwork isn't ready yet is asked about again.
+        #expect(!AppleMusicController.isAcceptableArtwork(Data()))
+    }
+
+    @Test func onlyCountsTheSize() {
+        // Whether it is a whole image is `ArtworkCompleteness`'s call, and decoding it the store's.
+        #expect(AppleMusicController.isAcceptableArtwork(Data("not an image".utf8)))
+        #expect(AppleMusicController.isAcceptableArtwork(Data("%PDF-1.4".utf8)))
     }
 }

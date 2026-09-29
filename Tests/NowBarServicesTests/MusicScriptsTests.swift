@@ -42,6 +42,25 @@ import NowBarCore
         #expect(!MusicScripts.control.contains("playpause"))
     }
 
+    @Test func favoriteTakesTheTrackIDAndOnlyTouchesThatTrack() {
+        let favorite = handlers(in: MusicScripts.control)["nb_favorite"] ?? ""
+        // The flag arrives with the persistent ID of the track the user clicked on.
+        #expect(favorite.hasPrefix("on nb_favorite(shouldFavorite, expectedID)\n"))
+        // The one write is behind the ID check, and goes to the track that was checked, not to whichever track
+        // is current by the time the write runs.
+        let writes = favorite.split(separator: "\n").filter { $0.contains("set favorited") }
+        #expect(writes == ["if (persistent ID of t) is expectedID then set favorited of t to shouldFavorite"])
+        #expect(favorite.contains("set t to current track\n"))
+        #expect(!favorite.contains("favorited of current track"))
+    }
+
+    @Test func artworkChecksTheTrackIDToo() {
+        // The pattern favorite follows: the ID is checked in the same script that does the work.
+        let artwork = handlers(in: MusicScripts.artwork)["nb_artwork"] ?? ""
+        #expect(artwork.hasPrefix("on nb_artwork(expectedID)\n"))
+        #expect(artwork.contains("if (persistent ID of t) is not expectedID then return missing value\n"))
+    }
+
     @Test func everyHandlerThatTalksToMusicIsGuarded() {
         let scripts = [("query", MusicScripts.query), ("artwork", MusicScripts.artwork), ("control", MusicScripts.control)]
         var checked = 0

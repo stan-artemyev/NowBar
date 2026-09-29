@@ -36,5 +36,8 @@ snapshots: ## Render the panel to PNGs in build/snapshots
 icon: ## Regenerate Resources/AppIcon.icns from scripts/make-icon.swift
 	$(SWIFT) scripts/make-icon.swift
 
+# `clean` deletes relative to the current directory, so it first checks that this is the repository root:
+# `make -f path/to/Makefile clean` run somewhere else must not remove that place's `build`.
 clean: ## Remove .build, build and .build-*
+	@test -f Package.swift -a -d Sources/NowBarCore || { echo "make: clean only runs in the NowBar repository root" >&2; exit 1; }
 	rm -rf .build build .build-*
