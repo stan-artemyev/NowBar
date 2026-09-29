@@ -53,13 +53,18 @@ struct OptimisticUpdateTests {
         #expect(harness.store.snapshot == .notRunning)
     }
 
-    @Test func theControllersConfirmationOverridesTheGuess() async {
-        let harness = harness(Fixture.running())
+    @Test func theControllersAnswerOverridesTheGuessOnceTheHoldIsOver() async {
+        let clock = TestClock(start)
+        let harness = Harness()
+        harness.store.now = { clock.current }
+        harness.startAndPush(Fixture.running())
 
         await harness.store.toggleFavorite().value
         #expect(harness.store.snapshot.track?.isFavorited == true)
 
-        // Music refused (for example the track isn't in the library): the next push wins.
+        // Music refused (for example the track isn't in the library) and keeps saying so: for a while the guess
+        // outranks it (see `FavoriteTests`), then the next push wins.
+        clock.advance(by: PlayerStore.favoriteHoldDuration)
         harness.player.push(Fixture.running())
         #expect(harness.store.snapshot.track?.isFavorited == false)
     }

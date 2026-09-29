@@ -142,7 +142,7 @@ swift test -Xswiftc -plugin-path -Xswiftc /Library/Developer/CommandLineTools/us
 
 **Nothing is playing and Play does nothing.** NowBar never launches Music on its own. Start it, or use ⋯ → Open Apple Music.
 
-**Clicking the star shows "To add songs and playlists to your Library, you must use Cloud Music Library".** That dialog is Apple Music's own, not NowBar's. Favoriting a song adds it to your library, which needs Sync Library to be on (Music → Settings → General), and Music's own star behaves the same way. Choose Merge Library to turn Sync Library on, or Not Now to skip it; the star then stays unfavorited. Sync Library covers your whole music library, not just NowBar, so turn it on only if you want that.
+**Clicking the star shows "To add songs and playlists to your Library, you must use Cloud Music Library".** That dialog is Apple Music's own, not NowBar's. Favoriting a song adds it to your library, which needs Sync Library to be on (Music → Settings → General), and Music's own star behaves the same way. Choose Merge Library to turn Sync Library on, or Not Now to skip it; the star then turns itself back off within about 10 seconds, because Music didn't favorite the song. Even with Sync Library on, Music takes a few seconds to save a favorite; the star stays on while it does. Sync Library covers your whole music library, not just NowBar, so turn it on only if you want that.
 
 **The artwork is a placeholder.** Apple Music doesn't expose artwork for some streamed tracks, so NowBar shows a placeholder. Known limitation.
 

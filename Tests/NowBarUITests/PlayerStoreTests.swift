@@ -338,19 +338,20 @@ struct PollingTests {
         harness.store.start()
         harness.player.push(Fixture.running())
 
-        // The poll is in flight when the user favorites the track...
+        // The poll is in flight when the user seeks (not a favorite: a favorite request is held against stale
+        // answers anyway, which would hide whether this one is dropped)...
         harness.player.holdRefresh = true
         harness.store.isPanelVisible = true
         #expect(await eventually { harness.player.heldRefresh != nil })
-        harness.store.toggleFavorite()
-        #expect(harness.store.snapshot.track?.isFavorited == true)
+        harness.store.seek(to: 100)
+        #expect(harness.store.snapshot.position == 100)
 
         // ...and the answer (read before the change) arrives afterwards: it must not undo it.
         harness.player.holdRefresh = false
-        harness.player.refreshResult = Fixture.running()   // not favorited
+        harness.player.refreshResult = Fixture.running()   // still at 84 s
         harness.player.releaseHeldRefresh()
         try? await Task.sleep(for: .milliseconds(80))
-        #expect(harness.store.snapshot.track?.isFavorited == true)
+        #expect(harness.store.snapshot.position == 100)
         harness.store.isPanelVisible = false
     }
 }

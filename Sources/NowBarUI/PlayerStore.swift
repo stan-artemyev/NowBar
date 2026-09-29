@@ -9,7 +9,7 @@ import os
 ///
 /// It owns the player, volume and media key services, mirrors their state, applies
 /// optimistic updates for user actions (the controller's next `onChange` confirms them;
-/// a play/pause request additionally outranks contradicting snapshots for a moment, see `reconcile(_:)`)
+/// a play/pause or favorite request additionally outranks contradicting snapshots for a while, see `reconcile(_:)`)
 /// and persists the user's settings.
 @MainActor
 @Observable
@@ -87,10 +87,12 @@ public final class PlayerStore {
     @ObservationIgnored private var lastPlayPauseRequest: Date?
     /// The play/pause request the player hasn't confirmed yet (see `reconcile(_:)`).
     @ObservationIgnored private var playbackHold: PlaybackHold?
+    /// The favorite request the player hasn't confirmed yet (see `reconcile(_:)`).
+    @ObservationIgnored private var favoriteHold: FavoriteHold?
 
     /// Seconds between polls while the panel is visible. Tests shorten it.
     @ObservationIgnored var pollInterval: Duration = .seconds(2)
-    /// Clock for optimistic updates, the play/pause debounce and the playback hold. Tests replace it.
+    /// Clock for optimistic updates, the play/pause debounce and the playback and favorite holds. Tests replace it.
     @ObservationIgnored var now: () -> Date = { Date() }
 
     /// A play/pause request that comes less than this many seconds after the previous one is ignored:
@@ -98,11 +100,25 @@ public final class PlayerStore {
     static let playPauseDebounce: TimeInterval = 0.4
     /// How many seconds after a play/pause request a snapshot that contradicts it is treated as stale.
     static let playbackHoldDuration: TimeInterval = 1.5
+    /// How many seconds after a favorite request a snapshot that contradicts it is treated as stale.
+    /// Music makes the change as a cloud edit that takes a few seconds to complete, and says "not favorited"
+    /// until it has.
+    static let favoriteHoldDuration: TimeInterval = 10
 
     /// A play/pause request the player hasn't confirmed yet.
     private struct PlaybackHold {
         /// The state the request asked for.
         var target: PlaybackState
+        /// The track it was made on.
+        var trackID: String
+        /// When the request stops outranking snapshots.
+        var until: Date
+    }
+
+    /// A favorite request the player hasn't confirmed yet.
+    private struct FavoriteHold {
+        /// The favorite state the request asked for.
+        var target: Bool
         /// The track it was made on.
         var trackID: String
         /// When the request stops outranking snapshots.
@@ -287,11 +303,26 @@ public final class PlayerStore {
         return Task { [player] in await player.seek(to: target) }
     }
 
+    /// Favorites the track when the panel shows it as not a favorite and unfavorites it otherwise: like play/pause,
+    /// what the user sees is what they react to, and the player is told exactly that (`setFavorited(true)` or
+    /// `(false)`, never a toggle). The star changes at once and stays that way while Music catches up (see
+    /// `reconcile(_:)`). A click while an earlier one is still on hold reads the star as it is displayed, so it
+    /// undoes the first, and the hold follows it. The star isn't debounced.
     @discardableResult
     public func toggleFavorite() -> Task<Void, Never> {
         guard snapshot.availability == .running, let track = snapshot.track else { return Task {} }
         let favorited = !track.isFavorited
         mutateSnapshot { $0.track?.isFavorited = favorited }
+        favoriteHold = FavoriteHold(
+            target: favorited,
+            trackID: track.id,
+            until: now().addingTimeInterval(Self.favoriteHoldDuration)
+        )
+        if favorited {
+            Self.log.info("favorite requested")
+        } else {
+            Self.log.info("unfavorite requested")
+        }
         return Task { [player] in await player.setFavorited(favorited) }
     }
 
@@ -358,12 +389,25 @@ public final class PlayerStore {
     /// Music can still answer "playing" for a moment after it was told to pause (and the other way round),
     /// and the panel would flip back. So while a play/pause request is on hold, a snapshot for the same track
     /// that contradicts it (a push or a poll alike) is treated as stale: the state, position and capture time
-    /// the request produced stay, and everything else (metadata, favorite, availability) comes from the snapshot.
+    /// the request produced stay, and everything else (metadata, availability, the favorite flag unless that
+    /// is on hold too) comes from the snapshot.
     ///
-    /// The hold ends when a snapshot confirms the request, when the track or the availability changes
-    /// (whatever the user asked for no longer applies), and when `playbackHoldDuration` runs out (Music
-    /// didn't do it, and the panel goes back to what Music says).
+    /// A favorite request is held the same way, for much longer: Music makes the change as a cloud edit that
+    /// takes a few seconds to complete, and answers "not favorited" until it has, to the read that follows the
+    /// request and to every poll after it. While the request is on hold, a snapshot for the same track that
+    /// contradicts it leaves the star as the request set it, and everything else comes from the snapshot.
+    ///
+    /// A hold ends when a snapshot confirms the request, when the track or the availability changes
+    /// (whatever the user asked for no longer applies), and when its duration (`playbackHoldDuration`,
+    /// `favoriteHoldDuration`) runs out (Music didn't do it, and the panel goes back to what Music says).
+    /// A newer request replaces the hold of the same kind. The two kinds are independent: either can be
+    /// active without the other, or both at once, and each only touches its own fields.
     private func reconcile(_ incoming: PlayerSnapshot) -> PlayerSnapshot {
+        applyingFavoriteHold(to: applyingPlaybackHold(to: incoming))
+    }
+
+    /// The state, position and capture time of `incoming` while a play/pause request is on hold.
+    private func applyingPlaybackHold(to incoming: PlayerSnapshot) -> PlayerSnapshot {
         guard let hold = playbackHold else { return incoming }
         guard now() < hold.until, incoming.availability == .running, incoming.track?.id == hold.trackID else {
             playbackHold = nil
@@ -377,6 +421,23 @@ public final class PlayerStore {
         held.state = snapshot.state
         held.position = snapshot.position
         held.capturedAt = snapshot.capturedAt
+        return held
+    }
+
+    /// The track's favorite flag in `incoming` while a favorite request is on hold.
+    private func applyingFavoriteHold(to incoming: PlayerSnapshot) -> PlayerSnapshot {
+        guard let hold = favoriteHold else { return incoming }
+        guard now() < hold.until, incoming.availability == .running,
+              let track = incoming.track, track.id == hold.trackID else {
+            favoriteHold = nil
+            return incoming
+        }
+        guard track.isFavorited != hold.target else {
+            favoriteHold = nil
+            return incoming
+        }
+        var held = incoming
+        held.track?.isFavorited = hold.target
         return held
     }
 

@@ -96,8 +96,12 @@ public struct PlayerPanel: View {
         .background {
             if !renderContext.isSnapshot {
                 WindowKeyObserver { store.isPanelVisible = $0 }
-                // The layout switch resizes the window; this keeps its top edge under the menu bar.
-                WindowTopAnchor()
+                // The window never follows the content while it is open, so the layout switch (Large Artwork
+                // to Compact and back) would leave it the old size. This sizes it to the panel, which the
+                // GeometryReader measures here: 300 pt by the content's height, not the window's size.
+                GeometryReader { proxy in
+                    WindowFitter(size: proxy.size)
+                }
             }
         }
         .focusable()
