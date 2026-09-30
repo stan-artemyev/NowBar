@@ -103,9 +103,10 @@ public protocol PlayerController: AnyObject {
     /// Restarts the current track, or goes to the previous one when near its start (Music's "back track").
     func previousTrack() async
     func seek(to seconds: TimeInterval) async
-    /// Sets the favorite flag of the track with id `trackID`, only while it is still the current track,
-    /// so a click that races a track change never favorites the next song.
-    func setFavorited(_ favorited: Bool, trackID: String) async
+    /// Sets the favorite flag of `track`, only while it is still the current track, so a click that races a
+    /// track change never favorites the next song. The track is recognised by its ID or, when Music has
+    /// re-identified it (favoriting can add a streamed song to the library under a new ID), by title and artist.
+    func setFavorited(_ favorited: Bool, track: Track) async
 
     /// Launches the music app if needed and brings it to the front. Only called from an explicit user action.
     func openApp()

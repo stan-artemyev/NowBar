@@ -17,14 +17,23 @@ final class TestClock {
     }
 }
 
+/// A favorite request as the player received it: what to set, and the track the click was on.
+struct FavoriteRequest: Equatable {
+    var favorited: Bool
+    var track: Track
+}
+
 /// A `PlayerController` that records calls and returns whatever the test sets up.
 @MainActor
 final class FakePlayer: PlayerController {
     var onChange: ((PlayerSnapshot) -> Void)?
 
+    /// One entry per call, e.g. "play" or "setFavorited(true, track: t1)" (the track's ID).
     private(set) var calls: [String] = []
     private(set) var refreshCount = 0
     private(set) var artworkRequests: [String] = []
+    /// The favorite requests in full, with the whole track (its ID, title and artist).
+    private(set) var favoriteRequests: [FavoriteRequest] = []
 
     var refreshResult: PlayerSnapshot = .notRunning
     var artworkByTrackID: [String: Data] = [:]
@@ -63,7 +72,10 @@ final class FakePlayer: PlayerController {
     func nextTrack() async { calls.append("nextTrack") }
     func previousTrack() async { calls.append("previousTrack") }
     func seek(to seconds: TimeInterval) async { calls.append("seek(\(seconds))") }
-    func setFavorited(_ favorited: Bool, trackID: String) async { calls.append("setFavorited(\(favorited), trackID: \(trackID))") }
+    func setFavorited(_ favorited: Bool, track: Track) async {
+        favoriteRequests.append(FavoriteRequest(favorited: favorited, track: track))
+        calls.append("setFavorited(\(favorited), track: \(track.id))")
+    }
     func openApp() { calls.append("openApp") }
 
     /// What the real controller does after a track or state change: push a snapshot.

@@ -17,7 +17,7 @@ NowBar is an independent project, not affiliated with or endorsed by Apple Inc. 
 - A music-note menu bar icon, optionally with "Title · Artist" beside it.
 - A panel with the artwork, title / artist / album, a favorite star, a draggable progress bar, previous / play-pause / next, and a volume row with a mute button for the Mac's output volume. With the panel open, Space plays or pauses, and the left and right arrow keys go to the previous and next track.
 - Two layouts, Large Artwork or Compact, chosen in the ⋯ menu. The ⋯ menu also holds Open Apple Music, Show Title in Menu Bar, Media Keys Control Apple Music, Launch at Login and Quit NowBar. While media keys are on but macOS hasn't granted access, it shows Allow Media Key Access… as well.
-- Optional media key handling: previous / play-pause / next always go to Apple Music while it is running, even when a browser tab is playing.
+- Optional media key handling, off by default: macOS already sends your media keys to Apple Music when it was the last thing playing. With the option on, previous / play-pause / next always go to Apple Music while it is running, even when a browser video took over.
 - Talks to Apple Music with Apple Events. NowBar never launches Music on its own.
 - No Dock icon. Settings are stored in UserDefaults.
 - A demo mode with a fake playlist, for trying it without Music.
@@ -66,13 +66,13 @@ tccutil reset Accessibility local.nowbar.NowBar  # forget the Accessibility perm
 
 ## First run and permissions
 
-NowBar needs two macOS permissions. It starts without either.
+NowBar needs one macOS permission, Automation, and asks for a second, Accessibility, only if you turn on the media keys option. It starts without either.
 
 **Automation (Apple Music).** The first time NowBar talks to a running Music app, macOS asks whether "NowBar wants to control Music". Choose OK. NowBar never launches Music itself, so start Music first, or use ⋯ → Open Apple Music. If you deny the request, the panel explains how to fix it: open System Settings → Privacy & Security → Automation and switch Music on under NowBar.
 
-**Accessibility (media keys).** Intercepting the media keys needs Accessibility permission. With Media Keys Control Apple Music on (the default), NowBar asks for it automatically, but only the first time. If you dismissed the request, the ⋯ menu shows Allow Media Key Access… for as long as media keys are on and the permission is missing: choose it to be asked again. NowBar then shows the system prompt or opens System Settings → Privacy & Security → Accessibility, where you switch NowBar on (use + to add it if it isn't listed). Without this permission the panel works as usual and the media keys keep going to macOS.
+**Accessibility (media keys, optional).** Only Media Keys Control Apple Music needs it, and that option is off by default, so NowBar never asks for Accessibility when it starts. Your media keys already reach Music through macOS whenever Music was the last thing playing. Turning the option on in the ⋯ menu makes them always go to Music, even when a browser video took over, and that is when NowBar asks. If the permission is missing, it asks every time you switch the option on: with the system prompt the first time, and after that by opening System Settings → Privacy & Security → Accessibility, where you switch NowBar on (use + to add it if it isn't listed). While the option is on but the permission is missing, the ⋯ menu also shows Allow Media Key Access…, which asks again. Without this permission the panel works as usual and the media keys keep going to macOS.
 
-**Rebuilds and moves can make macOS forget both grants.** `scripts/build-app.sh` signs ad-hoc by default, and an ad-hoc signature identifies the app only by a hash of its code (`codesign -d -r- build/NowBar.app` prints `designated => cdhash H"..."`). Every rebuild is therefore a different app to macOS, which forgets the Automation and Accessibility grants and can leave stale entries in the lists. Moving the app to a new location can do the same, for example from `~/Applications` to `/Applications`. After rebuilding or moving the app, clear the grants and grant them again when prompted:
+**Rebuilds and moves can make macOS forget the grants.** `scripts/build-app.sh` signs ad-hoc by default, and an ad-hoc signature identifies the app only by a hash of its code (`codesign -d -r- build/NowBar.app` prints `designated => cdhash H"..."`). Every rebuild is therefore a different app to macOS, which forgets the Automation and Accessibility grants and can leave stale entries in the lists. Moving the app to a new location can do the same, for example from `~/Applications` to `/Applications`. After rebuilding or moving the app, clear the grants and grant them again when prompted:
 
 ```sh
 tccutil reset AppleEvents local.nowbar.NowBar
@@ -83,13 +83,15 @@ To avoid this, sign with your own code-signing certificate (`SIGN_IDENTITY="Name
 
 ## Media keys
 
-With Accessibility permission and Media Keys Control Apple Music turned on in the ⋯ menu:
+Media Keys Control Apple Music is off by default. While it is off, NowBar leaves your media keys alone: macOS sends them to Music whenever Music was the last thing playing, and to whatever else took over (a browser video, say) otherwise.
+
+Turn the option on in the ⋯ menu to make them always go to Music, even when a browser video took over. It needs Accessibility permission, which NowBar asks for only at that moment. With the permission and the option on:
 
 - Previous, play/pause and next always go to Apple Music while it is running, even if a browser tab is playing.
 - When Music isn't running, macOS handles those keys as usual.
 - Mute and the volume keys keep controlling the Mac's volume, and the panel's volume row mirrors them.
 
-Turn Media Keys Control Apple Music off in the ⋯ menu to stop NowBar intercepting the keys.
+Turn Media Keys Control Apple Music off again in the ⋯ menu to stop NowBar intercepting the keys.
 
 ## Settings
 
@@ -99,8 +101,7 @@ Everything is stored in UserDefaults under the bundle identifier `local.nowbar.N
 | --- | --- | --- |
 | `panelLayout` | `large` or `compact` | `large` |
 | `showTitleInMenuBar` | Bool | `false` (icon only) |
-| `mediaKeysEnabled` | Bool | `true` |
-| `didRequestMediaKeyAccess` | Bool, set once NowBar has asked for Accessibility permission, so it only prompts automatically once | `false` |
+| `mediaKeysEnabled` | Bool | `false` (off until you turn it on) |
 
 ## Security and privacy
 
@@ -108,12 +109,12 @@ NowBar is a small tool that sits between your keyboard, the Music app and the me
 
 - **No network, no analytics.** NowBar has no networking code, no analytics, no telemetry and no crash reporting. It shows what Music reports on your Mac and sends nothing anywhere.
 - **Automation (Music).** NowBar reads what is playing (title, artist, album, position, favorite state and artwork) and sends play, pause, next, previous, seek and favorite. It never launches Music on its own, and each of its scripts checks that Music is running before it does anything.
-- **Accessibility, for the media keys only.** The event tap that catches the media keys is limited to system-defined events, which is where the media keys arrive, and it ignores everything in them except those keys. Play/pause, next and previous are handled; the volume and mute keys pass through to macOS untouched. Regular keystrokes are a different kind of event and never reach the tap, and it logs nothing.
+- **Accessibility, only if you opt in, and for the media keys only.** NowBar requests it only when you turn on Media Keys Control Apple Music, which is off by default; without it NowBar never asks. The event tap that catches the media keys is limited to system-defined events, which is where the media keys arrive, and it ignores everything in them except those keys. Play/pause, next and previous are handled; the volume and mute keys pass through to macOS untouched. Regular keystrokes are a different kind of event and never reach the tap, and it logs nothing.
 - **The Mac's volume** is read and set through CoreAudio, which needs no permission.
 - **Hardened runtime.** The app is signed with the hardened runtime and a single entitlement, `com.apple.security.automation.apple-events` (`Resources/NowBar.entitlements`), which a hardened app needs to send Apple Events to Music. Without the hardened runtime, any process of the same user could launch NowBar with `DYLD_INSERT_LIBRARIES` and borrow its Accessibility and Automation permissions. NowBar is not App Sandboxed.
-- **Music's data is treated as untrusted.** Artwork is size-limited and decoded by ImageIO off the main thread, and anything unreadable becomes the placeholder tile. Track IDs and positions reach AppleScript as typed arguments, never as text spliced into a script.
-- **Logs contain no song titles.** NowBar writes a few short lines to the unified log (subsystem `local.nowbar.NowBar`), such as "play requested". Music's own error text, which can quote a track's name, is logged as private.
-- **What it stores:** the four settings above, in UserDefaults. Artwork is kept in memory and never written to disk.
+- **Music's data is treated as untrusted.** Artwork is size-limited and decoded by ImageIO off the main thread, and anything unreadable becomes the placeholder tile. Track IDs, titles, artists and positions reach AppleScript as typed arguments, never as text spliced into a script.
+- **Logs contain no song titles.** NowBar writes a few short lines to the unified log (subsystem `local.nowbar.NowBar`), such as "play requested" or "favorite write: matched=true favoritedAfter=false", never a title, an artist or a track ID. Music's own error text, which can quote a track's name, is logged as private.
+- **What it stores:** the three settings above, in UserDefaults. Artwork is kept in memory and never written to disk.
 
 To report a security issue, open a GitHub issue.
 
@@ -134,7 +135,7 @@ Key decisions:
 
 - **AppleScript over Apple Events, not MediaRemote.** MediaRemote, the private framework that now-playing apps used to read the system's playing state, has been restricted for third-party apps since macOS 15.4. Music's scripting dictionary is a supported interface that also exposes the favorite flag, the artwork and the exact position. Scripts are compiled once and run one at a time on a private queue, never on the main thread, each with a 3 second timeout so an unresponsive Music can't stall the app.
 - **Never launching Music.** AppleScript would happily start an app it is told to talk to, so every script, and the controller before it, checks that Music is running first. Only the explicit Open Apple Music action launches it.
-- **Explicit play and pause commands, not a toggle.** A repeated or late toggle flips playback back, while `play` while playing and `pause` while paused change nothing. The store decides from what the panel shows, and requests that come right after the previous one (a double click, a bouncing key) are ignored. Favorites are explicit too: the store sends "favorite" or "unfavorite" and names the track that was on screen, so a click that races a track change never favorites the next song.
+- **Explicit play and pause commands, not a toggle.** A repeated or late toggle flips playback back, while `play` while playing and `pause` while paused change nothing. The store decides from what the panel shows, and requests that come right after the previous one (a double click, a bouncing key) are ignored. Favorites are explicit too: the store sends "favorite" or "unfavorite" together with the track that was on screen, and the script only writes if the current track is still that one, so a click that races a track change never favorites the next song. The track is recognised by its ID or, when Music re-identifies it after adding it to the library, by title and artist.
 - **Short "holds" against stale reads.** Music acknowledges a command a moment before its state changes, and it saves a favorite as a cloud edit that takes seconds, so a read right after an action can contradict what the user just did. For about a second and a half after a play/pause request, and about ten seconds after a favorite click, a reading of the same track that disagrees is treated as stale. The hold ends as soon as Music confirms, when the track changes, or when its time runs out.
 - **A single-flight refresh.** Music posts a notification on every play, pause and track change, any process can post it, and Music can take seconds to answer. Refreshes therefore run one at a time: requests that arrive while one runs are coalesced into exactly one more, so they never pile up on the script queue. While the panel is open the store also polls every 2 seconds to stay in sync.
 - **Resizing the menu bar window to its content.** A `MenuBarExtra` window is sized to its content when it opens and never again, so switching between Large Artwork and Compact left it the wrong size. `WindowFitter` measures the panel and resizes the window to match, keeping its top and left edges where they are so it stays attached to the menu bar.
@@ -187,11 +188,13 @@ swift test -Xswiftc -plugin-path -Xswiftc /Library/Developer/CommandLineTools/us
 
 **The panel says NowBar can't control Music.** Automation was denied. Switch Music on under NowBar in System Settings → Privacy & Security → Automation. If NowBar isn't listed, or macOS never asks again, run `tccutil reset AppleEvents local.nowbar.NowBar` and relaunch NowBar.
 
-**The media keys still go to the browser or to macOS.** Check that NowBar is switched on under System Settings → Privacy & Security → Accessibility (⋯ → Allow Media Key Access… takes you there), that Media Keys Control Apple Music is on in the ⋯ menu, and that Music is running (with Music closed, macOS handles the keys). After a rebuild, run `tccutil reset Accessibility local.nowbar.NowBar`, relaunch NowBar and grant the permission again.
+**The media keys still go to the browser or to macOS.** Media Keys Control Apple Music is off by default, so first check that it is on in the ⋯ menu (until then macOS sends the keys to Music only when Music was the last thing playing). Then check that NowBar is switched on under System Settings → Privacy & Security → Accessibility (⋯ → Allow Media Key Access… takes you there), and that Music is running (with Music closed, macOS handles the keys). After a rebuild, run `tccutil reset Accessibility local.nowbar.NowBar`, relaunch NowBar and grant the permission again.
 
 **Nothing is playing and Play does nothing.** NowBar never launches Music on its own. Start it, or use ⋯ → Open Apple Music.
 
 **Clicking the star shows "To add songs and playlists to your Library, you must use Cloud Music Library".** That dialog is Apple Music's own, not NowBar's. Favoriting a song adds it to your library, which needs Sync Library to be on (Music → Settings → General), and Music's own star behaves the same way. Choose Merge Library to turn Sync Library on, or Not Now to skip it; the star then turns itself back off within about 10 seconds, because Music didn't favorite the song. Even with Sync Library on, Music takes a few seconds to save a favorite; the star stays on while it does. Sync Library covers your whole music library, not just NowBar, so turn it on only if you want that.
+
+**Removing a favorite doesn't remove the song from your library, and the star takes a moment.** Clicking a filled star takes the favorite off, and that is all. Favoriting a song adds it to your library, and Apple Music keeps it there when you unfavorite it; to remove it, use Delete from Library in Music. Music also takes a few seconds to apply a favorite or an unfavorite, and NowBar keeps the star as you clicked it while it does.
 
 **The artwork is a placeholder.** Apple Music doesn't expose artwork for some streamed tracks, so NowBar shows a placeholder. Known limitation.
 

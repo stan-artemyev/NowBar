@@ -4,7 +4,7 @@ import Testing
 @testable import NowBarUI
 
 /// The star. The store shows a click at once and tells the player exactly what the user wants, and for which
-/// track (`setFavorited(true, trackID:)` or `(false, trackID:)`, never a toggle). Music makes the change as a
+/// track (`setFavorited(true, track:)` or `(false, track:)`, never a toggle). Music makes the change as a
 /// cloud edit that takes seconds and says "not favorited" until it is done, so for a while the store doesn't
 /// believe a snapshot that contradicts the click.
 @MainActor
@@ -31,25 +31,58 @@ struct FavoriteTests {
     @Test func aFavoriteRequestNamesTheTrackOnDisplay() async {
         let harness = harness(music(id: "a", favorited: false))
         await harness.store.toggleFavorite().value
-        #expect(harness.player.calls == ["start", "setFavorited(true, trackID: a)"])
+        #expect(harness.player.calls == ["start", "setFavorited(true, track: a)"])
     }
 
     @Test func anUnfavoriteRequestNamesItToo() async {
         let harness = harness(music(id: "b", favorited: true))
         await harness.store.toggleFavorite().value
-        #expect(harness.player.calls == ["start", "setFavorited(false, trackID: b)"])
+        #expect(harness.player.calls == ["start", "setFavorited(false, track: b)"])
+    }
+
+    @Test func theRequestCarriesTheWholeTrackOnDisplay() async {
+        // Music can give a song a new ID when favoriting adds it to the library, so the player also gets the title
+        // and artist to recognise it by.
+        let shown = Fixture.track(id: "a", title: "Midnight Circuit", artist: "Neon Harbor", favorited: false)
+        let harness = harness(Fixture.running(.playing, track: shown, position: 30, capturedAt: clock.current))
+
+        await harness.store.toggleFavorite().value
+        #expect(harness.player.favoriteRequests.count == 1)
+        let request = harness.player.favoriteRequests.first
+        #expect(request?.favorited == true)
+        #expect(request?.track.id == "a")
+        #expect(request?.track.title == "Midnight Circuit")
+        #expect(request?.track.artist == "Neon Harbor")
+    }
+
+    @Test func anUnfavoriteRequestCarriesTheWholeTrackToo() async {
+        let shown = Fixture.track(id: "b", title: "Paper Satellites", artist: "The Quiet Radios", favorited: true)
+        let harness = harness(Fixture.running(.paused, track: shown, position: 30, capturedAt: clock.current))
+
+        await harness.store.toggleFavorite().value
+        #expect(harness.player.favoriteRequests.count == 1)
+        let request = harness.player.favoriteRequests.first
+        #expect(request?.favorited == false)
+        #expect(request?.track.id == "b")
+        #expect(request?.track.title == "Paper Satellites")
+        #expect(request?.track.artist == "The Quiet Radios")
     }
 
     @Test func theRequestKeepsNamingTheTrackThatWasClickedWhenMusicMovesOnBeforeItIsSent() async {
-        let harness = harness(music(id: "a", favorited: false))
+        let clicked = Fixture.track(id: "a", title: "Clicked Song", artist: "Clicked Artist", favorited: false)
+        let next = Fixture.track(id: "b", title: "Next Song", artist: "Next Artist", favorited: false)
+        let harness = harness(Fixture.running(.playing, track: clicked, position: 30, capturedAt: clock.current))
 
         let task = harness.store.toggleFavorite()                  // the click, on "a"; the player hasn't been called yet
-        harness.player.push(music(id: "b", favorited: false))      // Music changes track in the meantime
+        harness.player.push(Fixture.running(.playing, track: next, position: 0, capturedAt: clock.current))   // Music changes track in the meantime
         #expect(harness.store.snapshot.track?.id == "b")
         await task.value
 
-        // The player is told which track the click was on, so it can refuse instead of favoriting "b".
-        #expect(harness.player.calls == ["start", "setFavorited(true, trackID: a)"])
+        // The player is told which track the click was on (its ID, title and artist), so it can refuse instead of
+        // favoriting "b".
+        #expect(harness.player.calls == ["start", "setFavorited(true, track: a)"])
+        #expect(harness.player.favoriteRequests.first?.track.title == "Clicked Song")
+        #expect(harness.player.favoriteRequests.first?.track.artist == "Clicked Artist")
         #expect(harness.store.snapshot.track?.id == "b")
         #expect(harness.store.snapshot.track?.isFavorited == false)
     }
@@ -160,7 +193,7 @@ struct FavoriteTests {
 
         // The user sees a filled star and clicks it: that is an unfavorite request, and nothing debounces it.
         await harness.store.toggleFavorite().value
-        #expect(harness.player.calls == ["start", "setFavorited(true, trackID: a)", "setFavorited(false, trackID: a)"])
+        #expect(harness.player.calls == ["start", "setFavorited(true, track: a)", "setFavorited(false, track: a)"])
         #expect(harness.store.snapshot.track?.isFavorited == false)
     }
 

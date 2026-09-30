@@ -161,12 +161,14 @@ public final class DemoPlayerController: PlayerController {
         emit()
     }
 
-    /// Like the real controller, it only changes the flag while `trackID` is still the current track (and still
-    /// reports when it isn't).
-    public func setFavorited(_ favorited: Bool, trackID: String) async {
-        guard availability == .running, let track = currentTrack else { return }
-        if track.id == trackID {
-            if favorited { favorites.insert(track.id) } else { favorites.remove(track.id) }
+    /// Like the real controller, it only changes the flag while `track` is still the current track, recognised by
+    /// its ID or by its title and artist (and it still reports when it isn't).
+    public func setFavorited(_ favorited: Bool, track: Track) async {
+        guard availability == .running, let current = currentTrack else { return }
+        let isSameTrack = current.id == track.id
+            || (!track.title.isEmpty && current.title == track.title && current.artist == track.artist)
+        if isSameTrack {
+            if favorited { favorites.insert(current.id) } else { favorites.remove(current.id) }
         }
         emit()
     }

@@ -36,11 +36,14 @@ public final class PlayerStore {
         didSet { defaults.set(showTitleInMenuBar, forKey: SettingsKey.showTitleInMenuBar) }
     }
 
+    /// Off by default: macOS already sends the media keys to Music while Music was the last thing to play. Turning
+    /// this on makes NowBar take them over, which needs Accessibility permission, so that is the only time NowBar
+    /// asks for it: every time the option is switched on while NowBar isn't trusted, and never at launch.
     public var mediaKeysEnabled: Bool {
         didSet {
             defaults.set(mediaKeysEnabled, forKey: SettingsKey.mediaKeysEnabled)
             mediaKeys?.isEnabled = mediaKeysEnabled
-            if mediaKeysEnabled { requestMediaKeyAccessIfFirstTime() }
+            if mediaKeysEnabled, !oldValue, let mediaKeys, !mediaKeys.isTrusted { requestMediaKeyAccess() }
         }
     }
 
@@ -152,7 +155,7 @@ public final class PlayerStore {
         self.mediaKeysTrusted = mediaKeys?.isTrusted ?? false
         self.layout = PanelLayout(rawValue: defaults.string(forKey: SettingsKey.panelLayout) ?? "") ?? .large
         self.showTitleInMenuBar = defaults.object(forKey: SettingsKey.showTitleInMenuBar) as? Bool ?? false
-        self.mediaKeysEnabled = defaults.object(forKey: SettingsKey.mediaKeysEnabled) as? Bool ?? true
+        self.mediaKeysEnabled = defaults.object(forKey: SettingsKey.mediaKeysEnabled) as? Bool ?? false
         self.launchAtLogin = loginItem.isEnabled
     }
 
@@ -176,7 +179,6 @@ public final class PlayerStore {
             mediaKeys.handler = { [weak self] key in self?.handleMediaKey(key) ?? false }
             mediaKeys.isEnabled = mediaKeysEnabled
             mediaKeysTrusted = mediaKeys.isTrusted
-            requestMediaKeyAccessIfFirstTime()
         }
     }
 
@@ -307,8 +309,9 @@ public final class PlayerStore {
 
     /// Favorites the track when the panel shows it as not a favorite and unfavorites it otherwise: like play/pause,
     /// what the user sees is what they react to, and the player is told exactly that (`setFavorited(true, …)` or
-    /// `(false, …)`, never a toggle). The request names the track that was on display at the click, so if Music
-    /// has moved on by the time it arrives, the next song isn't favorited instead. The star changes at once and
+    /// `(false, …)`, never a toggle). The request carries the track that was on display at the click, so if Music
+    /// has moved on by the time it arrives, the next song isn't favorited instead. The player recognises the track
+    /// by its ID or, when Music has re-identified it, by its title and artist. The star changes at once and
     /// stays that way while Music catches up (see `reconcile(_:)`). A click while an earlier one is still on hold
     /// reads the star as it is displayed, so it undoes the first, and the hold follows it. The star isn't debounced.
     @discardableResult
@@ -326,8 +329,7 @@ public final class PlayerStore {
         } else {
             Self.log.info("unfavorite requested")
         }
-        let trackID = track.id
-        return Task { [player] in await player.setFavorited(favorited, trackID: trackID) }
+        return Task { [player] in await player.setFavorited(favorited, track: track) }
     }
 
     public func openMusic() {
@@ -361,9 +363,9 @@ public final class PlayerStore {
         NSWorkspace.shared.open(url)
     }
 
-    /// Shows the Accessibility prompt (or opens the right System Settings pane).
+    /// Shows the Accessibility prompt (or opens the right System Settings pane). Only ever the result of an explicit
+    /// action of the user: turning media keys on, or choosing Allow Media Key Access… in the menu.
     public func requestMediaKeyAccess() {
-        defaults.set(true, forKey: SettingsKey.didRequestMediaKeyAccess)
         mediaKeys?.requestTrust()
     }
 
@@ -520,16 +522,6 @@ public final class PlayerStore {
         isSyncingLaunchAtLogin = true
         launchAtLogin = actual
         isSyncingLaunchAtLogin = false
-    }
-
-    // MARK: Media key access
-
-    /// Prompts for Accessibility once, the first time media keys are on without permission.
-    private func requestMediaKeyAccessIfFirstTime() {
-        guard let mediaKeys, mediaKeysEnabled, !mediaKeys.isTrusted,
-              !defaults.bool(forKey: SettingsKey.didRequestMediaKeyAccess) else { return }
-        defaults.set(true, forKey: SettingsKey.didRequestMediaKeyAccess)
-        mediaKeys.requestTrust()
     }
 }
 

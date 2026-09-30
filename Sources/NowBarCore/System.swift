@@ -69,8 +69,6 @@ public enum SettingsKey {
     public static let panelLayout = "panelLayout"
     /// Bool. Default: false (icon only).
     public static let showTitleInMenuBar = "showTitleInMenuBar"
-    /// Bool. Default: true.
+    /// Bool. Default: false. NowBar asks for Accessibility permission only when the user turns this on.
     public static let mediaKeysEnabled = "mediaKeysEnabled"
-    /// Bool. Set once NowBar has asked for Accessibility permission, so it only prompts automatically once.
-    public static let didRequestMediaKeyAccess = "didRequestMediaKeyAccess"
 }

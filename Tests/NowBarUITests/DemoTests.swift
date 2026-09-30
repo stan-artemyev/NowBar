@@ -136,8 +136,8 @@ struct DemoPlayerTests {
 
     @Test func favoritesStickToTheirTrack() async {
         let player = DemoPlayerController(availability: .running, state: .paused, trackIndex: 0, position: 0, capturedAt: now)
-        let first = DemoPlayerController.playlist[0].id
-        await player.setFavorited(true, trackID: first)
+        let first = DemoPlayerController.playlist[0]
+        await player.setFavorited(true, track: first)
         #expect(await player.refresh().track?.isFavorited == true)
 
         await player.nextTrack()
@@ -146,7 +146,7 @@ struct DemoPlayerTests {
         await player.previousTrack()   // back to the first track
         #expect(await player.refresh().track?.isFavorited == true)
 
-        await player.setFavorited(false, trackID: first)
+        await player.setFavorited(false, track: first)
         #expect(await player.refresh().track?.isFavorited == false)
     }
 
@@ -156,7 +156,7 @@ struct DemoPlayerTests {
         var pushed: [PlayerSnapshot] = []
         player.onChange = { pushed.append($0) }
 
-        await player.setFavorited(true, trackID: DemoPlayerController.playlist[0].id)
+        await player.setFavorited(true, track: DemoPlayerController.playlist[0])
         #expect(await player.refresh().track?.title == "Paper Satellites")
         #expect(await player.refresh().track?.isFavorited == false)
         #expect(pushed.count == 1)   // it still reports, as every action does
@@ -167,19 +167,53 @@ struct DemoPlayerTests {
         #expect(await player.refresh().track?.isFavorited == false)
 
         // An unfavorite request for another track leaves a favorite alone too.
-        await player.setFavorited(true, trackID: DemoPlayerController.playlist[0].id)
-        await player.setFavorited(false, trackID: DemoPlayerController.playlist[3].id)
+        await player.setFavorited(true, track: DemoPlayerController.playlist[0])
+        await player.setFavorited(false, track: DemoPlayerController.playlist[3])
         #expect(await player.refresh().track?.isFavorited == true)
     }
 
     @Test func aFavoriteRequestForAnUnknownTrackChangesNothing() async {
         let favorite = DemoPlayerController(availability: .running, state: .playing, trackIndex: 0, position: 10, isFavorited: true, capturedAt: now)
-        await favorite.setFavorited(false, trackID: "not-a-track")
+        await favorite.setFavorited(false, track: Fixture.track(id: "not-a-track", title: "Nobody", artist: "Nowhere"))
         #expect(await favorite.refresh().track?.isFavorited == true)
 
         let plain = DemoPlayerController(availability: .running, state: .playing, trackIndex: 0, position: 10, isFavorited: false, capturedAt: now)
-        await plain.setFavorited(true, trackID: "")
+        await plain.setFavorited(true, track: Fixture.track(id: "", title: "", artist: ""))
         #expect(await plain.refresh().track?.isFavorited == false)
+    }
+
+    @Test func aFavoriteRequestIsRecognisedByTitleAndArtistWhenTheIDIsNotTheOne() async {
+        // Like the real controller: Music can give a song a new ID when favoriting adds it to the library.
+        let player = DemoPlayerController(availability: .running, state: .paused, trackIndex: 2, position: 0, capturedAt: now)
+        let shown = DemoPlayerController.playlist[2]
+        let reidentified = Track(id: "a-new-id", title: shown.title, artist: shown.artist, album: "Another Album", duration: shown.duration, isFavorited: false)
+
+        await player.setFavorited(true, track: reidentified)
+        #expect(await player.refresh().track?.isFavorited == true)
+
+        await player.setFavorited(false, track: reidentified)
+        #expect(await player.refresh().track?.isFavorited == false)
+    }
+
+    @Test func aDifferentIDIsNotEnoughWhenTheTitleOrTheArtistDiffers() async {
+        let player = DemoPlayerController(availability: .running, state: .paused, trackIndex: 2, position: 0, capturedAt: now)
+        let shown = DemoPlayerController.playlist[2]
+
+        await player.setFavorited(true, track: Fixture.track(id: "other", title: shown.title, artist: "Someone Else"))
+        await player.setFavorited(true, track: Fixture.track(id: "other", title: "Another Song", artist: shown.artist))
+        #expect(await player.refresh().track?.isFavorited == false)
+    }
+
+    @Test func aTrackWithoutATitleIsOnlyRecognisedByItsID() async {
+        let nameless = Track(id: "nameless", title: "", artist: "", album: "", duration: 100, isFavorited: false)
+        let player = DemoPlayerController(fixedTrack: nameless, cover: 0, state: .playing, position: 10, capturedAt: now)
+
+        // Another nameless track has the same (empty) title and artist, which says nothing.
+        await player.setFavorited(true, track: Track(id: "someone-else", title: "", artist: "", album: "", duration: 100, isFavorited: false))
+        #expect(await player.refresh().track?.isFavorited == false)
+
+        await player.setFavorited(true, track: nameless)
+        #expect(await player.refresh().track?.isFavorited == true)
     }
 
     @Test func openingTheAppLaunchesItPaused() async {
@@ -196,7 +230,7 @@ struct DemoPlayerTests {
         await player.play()
         await player.pause()
         await player.nextTrack()
-        await player.setFavorited(true, trackID: DemoPlayerController.playlist[0].id)
+        await player.setFavorited(true, track: DemoPlayerController.playlist[0])
         #expect(await player.refresh() == .notRunning)
     }
 

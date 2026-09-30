@@ -151,9 +151,23 @@ public final class AppleMusicController: PlayerController {
         await send("nb_seek", arguments: [.number(max(0, seconds))])
     }
 
-    /// The script only sets the flag if the current track's persistent ID still equals `trackID`, like `artwork(for:)`.
-    public func setFavorited(_ favorited: Bool, trackID: String) async {
-        await send("nb_favorite", arguments: [.bool(favorited), .text(trackID)])
+    /// The script only sets the flag if the current track is still `track`, so a click that races a track change
+    /// never favorites the next song. It recognises the track by its persistent ID or, when Music has given the
+    /// song a new one (favoriting a streamed song adds it to the library), by its title and artist. What it did
+    /// is logged, without any of the track's details, and the player is read again afterwards.
+    public func setFavorited(_ favorited: Bool, track: Track) async {
+        let result = await run("nb_favorite", arguments: Self.favoriteArguments(favorited, track: track))
+        if let result, result.error == nil {
+            // Fixed words and booleans only, never a title, an artist or an ID, so all of it can be public.
+            musicLog.info("\(MusicFavoriteResult.logLine(for: result.value), privacy: .public)")
+        }
+        onChange?(await refresh())
+    }
+
+    /// The arguments of `nb_favorite`: the flag and the clicked track's ID, title and artist. They reach the script
+    /// as typed values, never as text spliced into it, so nothing in a title can change what the script does.
+    nonisolated static func favoriteArguments(_ favorited: Bool, track: Track) -> [ScriptArgument] {
+        [.bool(favorited), .text(track.id), .text(track.title), .text(track.artist)]
     }
 
     public func openApp() {
@@ -170,18 +184,25 @@ public final class AppleMusicController: PlayerController {
 
     // MARK: Actions
 
-    /// Runs a control handler, then reads the player again and pushes the result through `onChange`.
-    /// After a command that Music accepted, waits `settle` before that read, so it doesn't see the old state.
-    private func send(_ handler: String, arguments: [ScriptArgument] = [], settle: Duration = .zero) async {
-        if await prepare() == .ready {
-            let result = await runner.call(handler, in: MusicScripts.control, arguments: arguments)
-            if let error = result.error {
-                noteFailure(error, while: handler)
-            } else if settle > .zero {
-                // A cancelled wait just ends early; the read below still happens.
-                try? await Task.sleep(for: settle)
-            }
+    /// Runs a control handler and returns what it did: nil when Music wasn't ready for a script (it isn't running,
+    /// or NowBar isn't allowed to control it), otherwise the script's result, failed or not. A failure is logged.
+    /// After a command that Music accepted, waits `settle` before returning, so the read that follows doesn't
+    /// see the old state.
+    private func run(_ handler: String, arguments: [ScriptArgument] = [], settle: Duration = .zero) async -> ScriptResult? {
+        guard await prepare() == .ready else { return nil }
+        let result = await runner.call(handler, in: MusicScripts.control, arguments: arguments)
+        if let error = result.error {
+            noteFailure(error, while: handler)
+        } else if settle > .zero {
+            // A cancelled wait just ends early; the read that follows still happens.
+            try? await Task.sleep(for: settle)
         }
+        return result
+    }
+
+    /// Runs a control handler, then reads the player again and pushes the result through `onChange`.
+    private func send(_ handler: String, arguments: [ScriptArgument] = [], settle: Duration = .zero) async {
+        _ = await run(handler, arguments: arguments, settle: settle)
         onChange?(await refresh())
     }
 
