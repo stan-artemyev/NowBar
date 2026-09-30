@@ -92,7 +92,7 @@ public final class PlayerStore {
     @ObservationIgnored private var lastPlayPauseRequest: Date?
     /// The play/pause request the player hasn't confirmed yet (see `reconcile(_:)`).
     @ObservationIgnored private var playbackHold: PlaybackHold?
-    /// The favorite request the player hasn't confirmed yet (see `reconcile(_:)`).
+    /// The favorite or unfavorite request that is on hold (see `reconcile(_:)`).
     @ObservationIgnored private var favoriteHold: FavoriteHold?
 
     /// Seconds between polls while the panel is visible. Tests shorten it.
@@ -109,6 +109,12 @@ public final class PlayerStore {
     /// Music makes the change as a cloud edit that takes a few seconds to complete, and says "not favorited"
     /// until it has.
     static let favoriteHoldDuration: TimeInterval = 10
+    /// How many seconds after an unfavorite request the star is held off. Music reads "not favorited" back as
+    /// soon as the request is written, but only runs its favorites sync (`StoreSyncAppleMusicLoveCache`) 10 seconds
+    /// later, and the first sync after a removal restores the favorite. `AppleMusicController` looks again after
+    /// that sync and sends the removal once more, and that one only takes effect with the sync 10 seconds after
+    /// it, some 22 seconds after the click. The hold has to cover both syncs.
+    static let unfavoriteHoldDuration: TimeInterval = 25
 
     /// A play/pause request the player hasn't confirmed yet.
     private struct PlaybackHold {
@@ -124,10 +130,16 @@ public final class PlayerStore {
     private struct FavoriteHold {
         /// The favorite state the request asked for.
         var target: Bool
-        /// The track it was made on.
-        var trackID: String
+        /// The track it was made on. Only its identity counts (see `isSameSong`): its ID and, for a song that
+        /// Music has re-identified, its title and artist.
+        var track: Track
         /// When the request stops outranking snapshots.
         var until: Date
+
+        /// A favorite request ends as soon as Music says the same. An unfavorite request doesn't: Music says
+        /// "not favorited" from the moment of the write, and can still restore the favorite with its sync, so
+        /// only a new request, a track change, or the end of its duration ends it (see `reconcile(_:)`).
+        var endsWhenConfirmed: Bool { target }
     }
 
     private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "NowBar", category: "PlayerStore")
@@ -312,8 +324,9 @@ public final class PlayerStore {
     /// `(false, …)`, never a toggle). The request carries the track that was on display at the click, so if Music
     /// has moved on by the time it arrives, the next song isn't favorited instead. The player recognises the track
     /// by its ID or, when Music has re-identified it, by its title and artist. The star changes at once and
-    /// stays that way while Music catches up (see `reconcile(_:)`). A click while an earlier one is still on hold
-    /// reads the star as it is displayed, so it undoes the first, and the hold follows it. The star isn't debounced.
+    /// stays that way while Music catches up (see `reconcile(_:)`): 10 seconds for a favorite, 25 for an
+    /// unfavorite. A click while an earlier one is still on hold reads the star as it is displayed, so it undoes
+    /// the first, and the hold follows it. The star isn't debounced.
     @discardableResult
     public func toggleFavorite() -> Task<Void, Never> {
         guard snapshot.availability == .running, let track = snapshot.track else { return Task {} }
@@ -321,8 +334,8 @@ public final class PlayerStore {
         mutateSnapshot { $0.track?.isFavorited = favorited }
         favoriteHold = FavoriteHold(
             target: favorited,
-            trackID: track.id,
-            until: now().addingTimeInterval(Self.favoriteHoldDuration)
+            track: track,
+            until: now().addingTimeInterval(favorited ? Self.favoriteHoldDuration : Self.unfavoriteHoldDuration)
         )
         if favorited {
             Self.log.info("favorite requested")
@@ -401,13 +414,23 @@ public final class PlayerStore {
     /// A favorite request is held the same way, for much longer: Music makes the change as a cloud edit that
     /// takes a few seconds to complete, and answers "not favorited" until it has, to the read that follows the
     /// request and to every poll after it. While the request is on hold, a snapshot for the same track that
-    /// contradicts it leaves the star as the request set it, and everything else comes from the snapshot.
+    /// contradicts it leaves the star as the request set it, and everything else comes from the snapshot. The
+    /// same track is the same ID or, when Music has re-identified the song (favoriting a streamed one adds it to
+    /// the library under a new ID), the same title and artist.
     ///
-    /// A hold ends when a snapshot confirms the request, when the track or the availability changes
-    /// (whatever the user asked for no longer applies), and when its duration (`playbackHoldDuration`,
-    /// `favoriteHoldDuration`) runs out (Music didn't do it, and the panel goes back to what Music says).
-    /// A newer request replaces the hold of the same kind. The two kinds are independent: either can be
-    /// active without the other, or both at once, and each only touches its own fields.
+    /// An unfavorite request is held longer still (`unfavoriteHoldDuration`), and a snapshot that agrees with it
+    /// doesn't end the hold. Music says "not favorited" from the moment the removal is written, but its first
+    /// favorites sync, 10 seconds later, restores the favorite (`AppleMusicController` sends the removal once
+    /// more after it, and that one takes effect with the next sync). If the agreeing read ended the hold, the
+    /// star would come back on when the sync restores the favorite, and go off again only when the second
+    /// removal takes effect.
+    ///
+    /// A hold ends when the track or the availability changes (whatever the user asked for no longer applies)
+    /// and when its duration (`playbackHoldDuration`, `favoriteHoldDuration`, `unfavoriteHoldDuration`) runs out
+    /// (Music didn't do it, and the panel goes back to what Music says). A snapshot that confirms the request
+    /// ends a play/pause or a favorite hold, but not an unfavorite hold. A newer request replaces the hold
+    /// of the same kind. The two kinds are independent: either can be active without the other, or both at
+    /// once, and each only touches its own fields.
     private func reconcile(_ incoming: PlayerSnapshot) -> PlayerSnapshot {
         applyingFavoriteHold(to: applyingPlaybackHold(to: incoming))
     }
@@ -434,17 +457,26 @@ public final class PlayerStore {
     private func applyingFavoriteHold(to incoming: PlayerSnapshot) -> PlayerSnapshot {
         guard let hold = favoriteHold else { return incoming }
         guard now() < hold.until, incoming.availability == .running,
-              let track = incoming.track, track.id == hold.trackID else {
+              let track = incoming.track, Self.isSameSong(track, hold.track) else {
             favoriteHold = nil
             return incoming
         }
         guard track.isFavorited != hold.target else {
-            favoriteHold = nil
+            // Music says what the request asked for. That ends a favorite hold, but not an unfavorite hold: the
+            // favorite can still be restored by Music's sync, and the star must not follow it.
+            if hold.endsWhenConfirmed { favoriteHold = nil }
             return incoming
         }
         var held = incoming
         held.track?.isFavorited = hold.target
         return held
+    }
+
+    /// Whether `a` and `b` are the same song: the same ID or, because Music can give a song a new one, the same
+    /// title and artist. A track without a title can't be recognised by its name. The rule of the `nb_favorite`
+    /// script, so a hold applies to the song that the script wrote to.
+    nonisolated static func isSameSong(_ a: Track, _ b: Track) -> Bool {
+        a.id == b.id || (!a.title.isEmpty && a.title == b.title && a.artist == b.artist)
     }
 
     private func mutateSnapshot(_ change: (inout PlayerSnapshot) -> Void) {

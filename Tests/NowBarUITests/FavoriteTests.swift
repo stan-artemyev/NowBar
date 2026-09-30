@@ -6,7 +6,8 @@ import Testing
 /// The star. The store shows a click at once and tells the player exactly what the user wants, and for which
 /// track (`setFavorited(true, track:)` or `(false, track:)`, never a toggle). Music makes the change as a
 /// cloud edit that takes seconds and says "not favorited" until it is done, so for a while the store doesn't
-/// believe a snapshot that contradicts the click.
+/// believe a snapshot that contradicts the click. Removing a favorite is held longer and differently: Music says
+/// "not favorited" at once, but its favorites sync 10 seconds later restores the favorite (see "Unfavorite hold").
 @MainActor
 @Suite("Favorite")
 struct FavoriteTests {
@@ -21,9 +22,18 @@ struct FavoriteTests {
         return harness
     }
 
-    /// What Music says at the moment on `id`, playing at 30 s unless told otherwise.
-    func music(_ state: PlaybackState = .playing, id: String = "a", favorited: Bool) -> PlayerSnapshot {
-        Fixture.running(state, track: Fixture.track(id: id, favorited: favorited), position: 30, capturedAt: clock.current)
+    /// A track with a title and an artist of its own. Two tracks are the same song when they have the same `song`
+    /// (their ID unless told otherwise), whatever their IDs: the hold recognises a song by its ID or by its title
+    /// and artist, so tracks with different IDs must not share those unless a test means them to.
+    func track(id: String, song: String? = nil, favorited: Bool) -> Track {
+        let name = song ?? id
+        return Fixture.track(id: id, title: "Song \(name)", artist: "Artist \(name)", favorited: favorited)
+    }
+
+    /// What Music says at the moment on `id`, playing at 30 s unless told otherwise. `song` names the song under
+    /// another ID: `music(id: "a2", song: "a", …)` is song "a" after Music has given it a new ID.
+    func music(_ state: PlaybackState = .playing, id: String = "a", song: String? = nil, favorited: Bool) -> PlayerSnapshot {
+        Fixture.running(state, track: track(id: id, song: song, favorited: favorited), position: 30, capturedAt: clock.current)
     }
 
     // MARK: Which track
@@ -87,7 +97,7 @@ struct FavoriteTests {
         #expect(harness.store.snapshot.track?.isFavorited == false)
     }
 
-    // MARK: Hold
+    // MARK: Favorite hold
 
     @Test func theHoldLastsTenSeconds() {
         #expect(PlayerStore.favoriteHoldDuration == 10)
@@ -182,6 +192,230 @@ struct FavoriteTests {
         #expect(harness.store.snapshot.track?.isFavorited == false)
     }
 
+    // MARK: Unfavorite hold
+    //
+    // Music reads "not favorited" back as soon as a removal is written, but only runs its favorites sync 10 s later,
+    // and the first sync after a removal restores the favorite. `AppleMusicController` then sends the removal once
+    // more, which takes effect with the sync after that, some 22 s after the click. The star stays off through all
+    // of it, so an answer that agrees with the click doesn't end the hold.
+
+    /// A store that has just been told to unfavorite song "a" (t = 0): the star is off, held until t = 25.
+    func harnessAfterAnUnfavorite(id: String = "a") async -> Harness {
+        let harness = harness(music(id: id, favorited: true))
+        await harness.store.toggleFavorite().value
+        return harness
+    }
+
+    @Test func theUnfavoriteHoldLastsTwentyFiveSeconds() {
+        #expect(PlayerStore.unfavoriteHoldDuration == 25)
+        // Long enough for both syncs: the first at 10 s, then the resend at 12 s and the sync 10 s after it.
+        #expect(PlayerStore.unfavoriteHoldDuration > 12 + 10)
+    }
+
+    @Test func anUnfavoriteTurnsTheStarOffAtOnce() async {
+        let harness = harness(music(favorited: true))
+        let task = harness.store.toggleFavorite()
+        #expect(harness.store.snapshot.track?.isFavorited == false)   // before the player call has finished
+        await task.value
+        #expect(harness.player.calls == ["start", "setFavorited(false, track: a)"])
+    }
+
+    @Test func anAgreeingAnswerDoesNotEndTheHoldSoTheRestoredFavoriteNeverShows() async {
+        let harness = await harnessAfterAnUnfavorite()   // t = 0
+
+        // What the controller does after the write: read the track again. Music already says "not favorited".
+        clock.advance(by: 0.3)
+        harness.player.push(music(favorited: false))
+        #expect(harness.store.snapshot.track?.isFavorited == false)
+
+        // t = 10: Music's favorites sync runs, and the first sync after a removal restores the favorite.
+        clock.advance(by: 9.7)
+        harness.player.push(music(favorited: true))
+        #expect(harness.store.snapshot.track?.isFavorited == false)   // the star stays off
+
+        // The panel polls every 2 s, and Music keeps saying "favorited" until the resend's sync (t = 22).
+        for _ in 1...6 {
+            clock.advance(by: 2)
+            harness.player.refreshResult = music(favorited: true)
+            await harness.store.pollOnce()
+            #expect(harness.store.snapshot.track?.isFavorited == false)
+        }
+        harness.player.push(music(favorited: false))   // t = 22: the removal has taken effect
+        #expect(harness.store.snapshot.track?.isFavorited == false)
+    }
+
+    @Test func aHeldUnfavoriteStillBringsInEverythingButTheStar() async {
+        let harness = await harnessAfterAnUnfavorite()
+
+        var renamed = track(id: "a", favorited: true)
+        renamed.title = "Renamed"
+        clock.advance(by: 10)
+        harness.player.push(Fixture.running(.paused, track: renamed, position: 40, capturedAt: clock.current))
+
+        let snapshot = harness.store.snapshot
+        #expect(snapshot.track?.isFavorited == false)   // held
+        #expect(snapshot.track?.title == "Renamed")     // taken from the snapshot
+        #expect(snapshot.state == .paused)              // and so is the rest
+        #expect(snapshot.position == 40)
+    }
+
+    @Test func afterTwentyFiveSecondsMusicsValueWins() async {
+        let harness = await harnessAfterAnUnfavorite()   // t = 0
+
+        clock.advance(by: 24.5)
+        harness.player.push(music(favorited: true))
+        #expect(harness.store.snapshot.track?.isFavorited == false)   // still on hold
+
+        clock.advance(by: 0.5)   // t = 25
+        harness.player.push(music(favorited: true))
+        #expect(harness.store.snapshot.track?.isFavorited == true)    // Music never removed it: the panel follows it again
+    }
+
+    @Test func afterTheUnfavoriteHoldEveryAnswerIsTakenAsItComes() async {
+        let harness = await harnessAfterAnUnfavorite()
+
+        clock.advance(by: 26)
+        harness.player.push(music(favorited: true))
+        #expect(harness.store.snapshot.track?.isFavorited == true)
+        harness.player.push(music(favorited: false))
+        #expect(harness.store.snapshot.track?.isFavorited == false)
+        harness.player.push(music(favorited: true))
+        #expect(harness.store.snapshot.track?.isFavorited == true)
+    }
+
+    @Test func aFavoriteHoldStillEndsWhenMusicAgrees() async {
+        // The difference between the two kinds, side by side: the same agreeing answer, then the opposite one.
+        let favorite = harness(music(favorited: false))
+        await favorite.store.toggleFavorite().value
+        clock.advance(by: 1)
+        favorite.player.push(music(favorited: true))
+        clock.advance(by: 1)
+        favorite.player.push(music(favorited: false))
+        #expect(favorite.store.snapshot.track?.isFavorited == false)   // ended: Music is believed again
+
+        let unfavorite = await harnessAfterAnUnfavorite()
+        clock.advance(by: 1)
+        unfavorite.player.push(music(favorited: false))
+        clock.advance(by: 1)
+        unfavorite.player.push(music(favorited: true))
+        #expect(unfavorite.store.snapshot.track?.isFavorited == false)   // not ended: still held
+    }
+
+    // MARK: The same song
+    //
+    // Music can give a song a new ID (favoriting a streamed song adds it to the library), so a hold recognises the song
+    // it was made on by its ID or by its title and artist, as the `nb_favorite` script does.
+
+    @Test func aReidentifiedSongKeepsAnUnfavoriteHold() async {
+        let harness = await harnessAfterAnUnfavorite()   // song "a", t = 0
+
+        clock.advance(by: 1)
+        harness.player.push(music(id: "a2", song: "a", favorited: false))   // Music agrees, under a new ID
+        #expect(harness.store.snapshot.track?.id == "a2")
+        #expect(harness.store.snapshot.track?.isFavorited == false)
+
+        clock.advance(by: 9)
+        harness.player.push(music(id: "a2", song: "a", favorited: true))    // the sync restores the favorite
+        #expect(harness.store.snapshot.track?.id == "a2")
+        #expect(harness.store.snapshot.track?.isFavorited == false)         // still held
+    }
+
+    @Test func aReidentifiedSongKeepsAFavoriteHoldToo() async {
+        let harness = harness(music(id: "a", favorited: false))
+        await harness.store.toggleFavorite().value   // favorite song "a"
+
+        // Favoriting a streamed song adds it to the library under a new ID, and Music still says "not favorited".
+        clock.advance(by: 1)
+        harness.player.push(music(id: "a2", song: "a", favorited: false))
+        #expect(harness.store.snapshot.track?.id == "a2")
+        #expect(harness.store.snapshot.track?.isFavorited == true)   // held
+
+        clock.advance(by: 2)
+        harness.player.push(music(id: "a2", song: "a", favorited: true))   // the cloud edit landed: that ends the hold
+        #expect(harness.store.snapshot.track?.isFavorited == true)
+        clock.advance(by: 1)
+        harness.player.push(music(id: "a2", song: "a", favorited: false))
+        #expect(harness.store.snapshot.track?.isFavorited == false)
+    }
+
+    @Test func theHoldKeepsRecognisingTheSongThroughFurtherNewIDs() async {
+        let harness = await harnessAfterAnUnfavorite()
+
+        clock.advance(by: 1)
+        harness.player.push(music(id: "a2", song: "a", favorited: true))
+        #expect(harness.store.snapshot.track?.isFavorited == false)
+        clock.advance(by: 1)
+        harness.player.push(music(id: "a3", song: "a", favorited: true))
+        #expect(harness.store.snapshot.track?.isFavorited == false)
+        clock.advance(by: 1)
+        harness.player.push(music(id: "a", song: "a", favorited: true))   // and the original ID again
+        #expect(harness.store.snapshot.track?.isFavorited == false)
+    }
+
+    @Test func aDifferentSongEndsAnUnfavoriteHold() async {
+        let harness = await harnessAfterAnUnfavorite()
+
+        clock.advance(by: 1)
+        harness.player.push(music(id: "b", favorited: true))   // "b" is a favorite of its own
+        #expect(harness.store.snapshot.track?.id == "b")
+        #expect(harness.store.snapshot.track?.isFavorited == true)
+
+        // Nothing is held against "a" when it comes back a moment later, well inside the 25 s.
+        clock.advance(by: 1)
+        harness.player.push(music(id: "a", favorited: true))
+        #expect(harness.store.snapshot.track?.isFavorited == true)
+    }
+
+    @Test func aSongWithTheSameTitleByAnotherArtistIsAnotherSong() async {
+        let harness = harness(Fixture.running(.playing, track: Fixture.track(id: "a", title: "Echoes", artist: "First Band", favorited: true), position: 30, capturedAt: clock.current))
+        await harness.store.toggleFavorite().value   // unfavorite "Echoes" by "First Band"
+
+        clock.advance(by: 1)
+        let cover = Fixture.track(id: "b", title: "Echoes", artist: "Second Band", favorited: true)
+        harness.player.push(Fixture.running(.playing, track: cover, position: 0, capturedAt: clock.current))
+        #expect(harness.store.snapshot.track?.id == "b")
+        #expect(harness.store.snapshot.track?.isFavorited == true)   // not held: another song
+    }
+
+    @Test func aSongByTheSameArtistWithAnotherTitleIsAnotherSong() async {
+        let harness = harness(Fixture.running(.playing, track: Fixture.track(id: "a", title: "Echoes", artist: "First Band", favorited: true), position: 30, capturedAt: clock.current))
+        await harness.store.toggleFavorite().value
+
+        clock.advance(by: 1)
+        let next = Fixture.track(id: "b", title: "Shadows", artist: "First Band", favorited: true)
+        harness.player.push(Fixture.running(.playing, track: next, position: 0, capturedAt: clock.current))
+        #expect(harness.store.snapshot.track?.isFavorited == true)
+    }
+
+    @Test func aTrackWithoutATitleIsNotRecognisedByItsName() async {
+        // Two untitled tracks by the same artist are not the same song; only an equal ID makes them one.
+        let untitled = Fixture.track(id: "a", title: "", artist: "First Band", favorited: true)
+        let harness = harness(Fixture.running(.playing, track: untitled, position: 30, capturedAt: clock.current))
+        await harness.store.toggleFavorite().value
+
+        clock.advance(by: 1)
+        let other = Fixture.track(id: "b", title: "", artist: "First Band", favorited: true)
+        harness.player.push(Fixture.running(.playing, track: other, position: 0, capturedAt: clock.current))
+        #expect(harness.store.snapshot.track?.id == "b")
+        #expect(harness.store.snapshot.track?.isFavorited == true)   // not held
+
+        // The hold ended with that, so even the original ID isn't held any more.
+        clock.advance(by: 1)
+        harness.player.push(Fixture.running(.playing, track: untitled, position: 0, capturedAt: clock.current))
+        #expect(harness.store.snapshot.track?.isFavorited == true)
+    }
+
+    @Test func theSameIDIsTheSameSongWhateverItIsCalled() async {
+        // The hold was made on the track as it was clicked; the metadata changed underneath it.
+        let harness = await harnessAfterAnUnfavorite()
+
+        clock.advance(by: 1)
+        let edited = Fixture.track(id: "a", title: "A Better Title", artist: "Another Artist", favorited: true)
+        harness.player.push(Fixture.running(.playing, track: edited, position: 30, capturedAt: clock.current))
+        #expect(harness.store.snapshot.track?.title == "A Better Title")
+        #expect(harness.store.snapshot.track?.isFavorited == false)   // still held
+    }
+
     // MARK: Clicking again
 
     @Test func aSecondClickInsideTheHoldUnfavoritesAndTheStarTurnsOff() async {
@@ -201,7 +435,7 @@ struct FavoriteTests {
         let harness = harness(music(favorited: false))
         await harness.store.toggleFavorite().value   // t = 0: favorite, held until t = 10
         clock.advance(by: 2)
-        await harness.store.toggleFavorite().value   // t = 2: unfavorite, held until t = 12
+        await harness.store.toggleFavorite().value   // t = 2: unfavorite, held until t = 27
 
         // The first cloud edit lands: Music says "favorited". That answers the first click, not the second.
         clock.advance(by: 3)   // t = 5
@@ -213,23 +447,55 @@ struct FavoriteTests {
         harness.player.push(music(favorited: true))
         #expect(harness.store.snapshot.track?.isFavorited == false)
 
-        clock.advance(by: 1.5)   // t = 12.5
+        // And it lasts as long as an unfavorite hold does, counted from the second click.
+        clock.advance(by: 15.5)   // t = 26.5
+        harness.player.push(music(favorited: true))
+        #expect(harness.store.snapshot.track?.isFavorited == false)
+
+        clock.advance(by: 1)   // t = 27.5
         harness.player.push(music(favorited: true))
         #expect(harness.store.snapshot.track?.isFavorited == true)
     }
 
-    @Test func anAnswerThatAgreesWithTheSecondClickEndsTheHold() async {
-        let harness = harness(music(favorited: false))
-        await harness.store.toggleFavorite().value
+    @Test func aFavoriteClickAfterAnUnfavoriteHoldsAsAFavoriteDoes() async {
+        let harness = harness(music(favorited: true))
+        await harness.store.toggleFavorite().value   // t = 0: unfavorite, held until t = 25
         clock.advance(by: 1)
-        await harness.store.toggleFavorite().value   // unfavorite
-
-        clock.advance(by: 1)
-        harness.player.push(music(favorited: false))   // Music agrees
+        harness.player.push(music(favorited: false))
         #expect(harness.store.snapshot.track?.isFavorited == false)
 
-        // Nothing is held any more: the user favorites in Music itself and that is taken at once.
+        // The user sees an empty star and clicks it: a favorite request, on its own terms (10 s, ended by Music agreeing).
+        await harness.store.toggleFavorite().value   // t = 1
+        #expect(harness.player.calls == ["start", "setFavorited(false, track: a)", "setFavorited(true, track: a)"])
+        #expect(harness.store.snapshot.track?.isFavorited == true)
+
         clock.advance(by: 1)
+        harness.player.push(music(favorited: false))   // stale: the unfavorite is still on its way out
+        #expect(harness.store.snapshot.track?.isFavorited == true)
+        clock.advance(by: 1)
+        harness.player.push(music(favorited: true))    // the cloud edit landed: that ends the hold
+        #expect(harness.store.snapshot.track?.isFavorited == true)
+
+        // Nothing is held any more, and the old unfavorite hold is gone with the click that replaced it.
+        clock.advance(by: 1)
+        harness.player.push(music(favorited: false))
+        #expect(harness.store.snapshot.track?.isFavorited == false)
+    }
+
+    @Test func aNewUnfavoriteAfterTheHoldRanOutStartsAFreshHold() async {
+        let harness = await harnessAfterAnUnfavorite()   // t = 0: held until t = 25
+        clock.advance(by: 26)
+        harness.player.push(music(favorited: true))      // Music never removed it, and the hold is over
+        #expect(harness.store.snapshot.track?.isFavorited == true)
+
+        await harness.store.toggleFavorite().value       // t = 26: unfavorite again, held until t = 51
+        #expect(harness.player.calls == ["start", "setFavorited(false, track: a)", "setFavorited(false, track: a)"])
+        #expect(harness.store.snapshot.track?.isFavorited == false)
+
+        clock.advance(by: 24)   // t = 50
+        harness.player.push(music(favorited: true))
+        #expect(harness.store.snapshot.track?.isFavorited == false)
+        clock.advance(by: 1)    // t = 51
         harness.player.push(music(favorited: true))
         #expect(harness.store.snapshot.track?.isFavorited == true)
     }
@@ -307,6 +573,47 @@ struct FavoriteTests {
         clock.advance(by: 1)
         harness.player.push(music(favorited: false))
         #expect(harness.store.snapshot.track?.isFavorited == false)
+    }
+
+    @Test func theTrackDisappearingEndsAnUnfavoriteHold() async {
+        let harness = await harnessAfterAnUnfavorite()
+
+        let idle = PlayerSnapshot(availability: .running, state: .stopped, track: nil, position: 0, capturedAt: clock.current)
+        clock.advance(by: 1)
+        harness.player.push(idle)
+        #expect(harness.store.snapshot == idle)
+
+        // Nothing is held against the song when it is back, well inside the 25 s.
+        clock.advance(by: 1)
+        harness.player.push(music(favorited: true))
+        #expect(harness.store.snapshot.track?.isFavorited == true)
+    }
+
+    @Test func musicQuittingEndsAnUnfavoriteHold() async {
+        let harness = await harnessAfterAnUnfavorite()
+
+        harness.player.push(.notRunning)
+        #expect(harness.store.snapshot == .notRunning)
+
+        clock.advance(by: 1)
+        harness.player.push(music(favorited: true))
+        #expect(harness.store.snapshot.track?.isFavorited == true)
+    }
+
+    @Test func anythingButRunningEndsAnUnfavoriteHold() async {
+        let harness = await harnessAfterAnUnfavorite()
+
+        // Not something Music sends with a track, but the rule is about availability alone.
+        let denied = PlayerSnapshot(
+            availability: .notAuthorized, state: .playing, track: track(id: "a", favorited: true),
+            position: 50, capturedAt: clock.current
+        )
+        harness.player.push(denied)
+        #expect(harness.store.snapshot == denied)
+
+        clock.advance(by: 1)
+        harness.player.push(music(favorited: true))
+        #expect(harness.store.snapshot.track?.isFavorited == true)
     }
 
     // MARK: Alongside the play/pause hold
