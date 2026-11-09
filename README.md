@@ -210,9 +210,11 @@ swift test -Xswiftc -plugin-path -Xswiftc /Library/Developer/CommandLineTools/us
 
 ## How it was built
 
-NowBar was built with [Claude Code](https://claude.com/claude-code). Claude Opus 5.5 orchestrated the work: the architecture, the module contracts, the review and the integration. Claude Sonnet agents implemented the modules and the later fixes in parallel. A later review and refactoring pass was done with Claude Fable 5.2.
+NowBar was built with [Claude Code](https://claude.com/claude-code). Claude Opus 5.5 orchestrated the work: the architecture, the module contracts, the review and the integration. Claude Sonnet agents implemented the modules and the later fixes in parallel.
 
-The author, Stanislav Artemyev, defined the requirements, approved a clickable HTML prototype (`design/prototype.html`) before any code was written, tested every build on real hardware, directed the fixes (several were diagnosed from macOS system logs) and commissioned a security review before publishing.
+After the first release, a whole-codebase review and refactor with Claude Fable 5.2 fixed two edge-case bugs and removed duplicated logic. The test suite and a pixel-by-pixel comparison of the rendered panel confirmed that nothing else changed.
+
+The author, Stanislav Artemyev, defined the requirements, approved a clickable HTML prototype (`design/prototype.html`) before any code was written, tested every build on real hardware, directed the fixes (several were diagnosed from macOS system logs), and commissioned a security review before publishing and the code review after the first release.
 
 ## License
 
