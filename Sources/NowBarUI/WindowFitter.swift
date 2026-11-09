@@ -86,7 +86,7 @@ struct WindowFitter: NSViewRepresentable {
         /// Puts a fit off to the next turn of the main queue. Tests replace it to run the queue by hand.
         var enqueue: (@escaping () -> Void) -> Void = { work in DispatchQueue.main.async(execute: work) }
 
-        private var tokens: [NSObjectProtocol] = []
+        private let observation = WindowObservation()
         private var isFitScheduled = false
 
         /// Never takes mouse events from the panel's content.
@@ -96,19 +96,9 @@ struct WindowFitter: NSViewRepresentable {
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            removeObservers()
-            guard let window else { return }
-            let center = NotificationCenter.default
-            let names: [Notification.Name] = [
-                NSWindow.didBecomeKeyNotification,
-                NSWindow.didChangeOcclusionStateNotification,
-            ]
-            tokens = names.map { name in
-                center.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.scheduleFit() }
-                }
-            }
-            scheduleFit()
+            let names = [NSWindow.didBecomeKeyNotification, NSWindow.didChangeOcclusionStateNotification]
+            observation.observe(names, of: window) { [weak self] _ in self?.scheduleFit() }
+            if window != nil { scheduleFit() }
         }
 
         /// Asks for a fit on the next turn of the main queue. Asking again before it runs changes nothing.
@@ -126,15 +116,6 @@ struct WindowFitter: NSViewRepresentable {
             window.setFrame(target, display: true)
             // The shadow was cast by the old shape; without this it stays behind as a ghost edge.
             window.invalidateShadow()
-        }
-
-        private func removeObservers() {
-            tokens.forEach(NotificationCenter.default.removeObserver)
-            tokens = []
-        }
-
-        deinit {
-            tokens.forEach(NotificationCenter.default.removeObserver)
         }
     }
 }

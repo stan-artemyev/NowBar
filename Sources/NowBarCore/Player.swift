@@ -43,6 +43,13 @@ public struct Track: Sendable, Equatable {
         self.duration = duration
         self.isFavorited = isFavorited
     }
+
+    /// Whether `other` is the same song: the same ID or, because Music can give a song a new one (favoriting a
+    /// streamed song adds it to the library), the same title and artist. A track without a title can't be
+    /// recognised by its name. The `nb_favorite` script applies the same rule to the current track.
+    public func isSameSong(as other: Track) -> Bool {
+        id == other.id || (!title.isEmpty && title == other.title && artist == other.artist)
+    }
 }
 
 /// A point-in-time reading of the player.

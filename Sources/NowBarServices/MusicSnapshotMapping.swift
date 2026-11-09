@@ -118,11 +118,10 @@ enum MusicSnapshotMapper {
         let title = raw.title ?? ""
         let artist = raw.artist ?? ""
         let album = raw.album ?? ""
-        let persistentID = raw.trackID?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasPersistentID = !(persistentID ?? "").isEmpty
-        guard hasPersistentID || !title.isEmpty || !artist.isEmpty || !album.isEmpty else { return nil }
+        let persistentID = raw.trackID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !persistentID.isEmpty || !title.isEmpty || !artist.isEmpty || !album.isEmpty else { return nil }
         return Track(
-            id: hasPersistentID ? persistentID! : [title, artist, album].joined(separator: "\u{1F}"),
+            id: persistentID.isEmpty ? [title, artist, album].joined(separator: "\u{1F}") : persistentID,
             title: title,
             artist: artist,
             album: album,

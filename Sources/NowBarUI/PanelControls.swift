@@ -97,7 +97,7 @@ struct ProgressSection: View {
 
     private func scrubber(duration: TimeInterval) -> some View {
         let ticking = snapshot.state == .playing && store.isPanelVisible && scrub == nil
-        return TimelineView(.animation(minimumInterval: 0.1, paused: !ticking)) { _ in
+        return TimelineView(.animation(minimumInterval: Self.redrawInterval(duration: duration), paused: !ticking)) { _ in
             // The timeline only paces the redraws; the position always comes from the current time,
             // so the first frame after the panel opens is never stale.
             let position = snapshot.position(at: renderContext.now ?? Date())
@@ -132,6 +132,17 @@ struct ProgressSection: View {
                 .accessibilityHidden(true)
             }
         }
+    }
+}
+
+extension ProgressSection {
+    /// The bar's width in pixels: the panel's 272 pt content width at 2x.
+    private static let barPixels: Double = 544
+
+    /// Seconds between redraws while a track plays: the time the bar takes to move one pixel, so no redraw draws
+    /// the same picture twice. At least 0.1 (short tracks stay smooth) and at most 0.5 (the clock stays timely).
+    static func redrawInterval(duration: TimeInterval) -> TimeInterval {
+        min(max(duration / barPixels, 0.1), 0.5)
     }
 }
 

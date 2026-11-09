@@ -20,32 +20,22 @@ struct WindowKeyObserver: NSViewRepresentable {
 
     final class ObserverView: NSView {
         var onChange: ((Bool) -> Void)?
-        private var tokens: [NSObjectProtocol] = []
+        private let observation = WindowObservation()
         private var lastReported: Bool?
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            removeObservers()
-            guard let window else {
-                report(false)
-                return
-            }
-            let center = NotificationCenter.default
             let names: [Notification.Name] = [
                 NSWindow.didBecomeKeyNotification,
                 NSWindow.didResignKeyNotification,
                 NSWindow.didChangeOcclusionStateNotification,
                 NSWindow.willCloseNotification,
             ]
-            tokens = names.map { name in
-                center.addObserver(forName: name, object: window, queue: .main) { [weak self] note in
-                    MainActor.assumeIsolated {
-                        if note.name == NSWindow.willCloseNotification {
-                            self?.report(false)
-                        } else {
-                            self?.reportCurrentState()
-                        }
-                    }
+            observation.observe(names, of: window) { [weak self] name in
+                if name == NSWindow.willCloseNotification {
+                    self?.report(false)
+                } else {
+                    self?.reportCurrentState()
                 }
             }
             reportCurrentState()
@@ -60,15 +50,6 @@ struct WindowKeyObserver: NSViewRepresentable {
             guard visible != lastReported else { return }
             lastReported = visible
             onChange?(visible)
-        }
-
-        private func removeObservers() {
-            tokens.forEach(NotificationCenter.default.removeObserver)
-            tokens = []
-        }
-
-        deinit {
-            tokens.forEach(NotificationCenter.default.removeObserver)
         }
     }
 }

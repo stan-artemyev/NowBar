@@ -64,7 +64,7 @@ struct OptimisticUpdateTests {
 
         // Music refused (for example the track isn't in the library) and keeps saying so: for a while the guess
         // outranks it (see `FavoriteTests`), then the next push wins.
-        clock.advance(by: PlayerStore.favoriteHoldDuration)
+        clock.advance(by: FavoriteSync.favoriteHold)
         harness.player.push(Fixture.running())
         #expect(harness.store.snapshot.track?.isFavorited == false)
     }

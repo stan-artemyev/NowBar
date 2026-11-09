@@ -14,8 +14,7 @@ private let musicLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "NowBar
 /// - The first time NowBar talks to a running Music, macOS shows its one-time "NowBar wants to control Music"
 ///   prompt. Until it is answered only the script queue waits. A denial produces `.notAuthorized`, and every
 ///   later `refresh()` asks again, so turning access on in System Settings recovers without a restart.
-/// - Removing a favorite is followed up once, 12 seconds later, by a task of the controller's own (see
-///   `setFavorited`).
+/// - Removing a favorite is followed up by a task of the controller's own (see `setFavorited`).
 @MainActor
 public final class AppleMusicController: PlayerController {
     public var onChange: ((PlayerSnapshot) -> Void)?
@@ -60,13 +59,6 @@ public final class AppleMusicController: PlayerController {
     /// moment before its player state changes, so an immediate read can still return the old state.
     private static let transportSettleTime = Duration.milliseconds(250)
     private static let launchSettleTime = Duration.seconds(1)
-    /// How long after an unfavorite NowBar reads Music again to see whether its sync restored the favorite (see
-    /// `setFavorited`): Music's 10 second favorites sync, plus a margin for the sync to finish.
-    nonisolated static let unfavoriteRecheckDelay = Duration.seconds(12)
-    /// When that first look finds the removal still in place, how much later NowBar looks once more before it
-    /// trusts it: Music's sync can finish late on a slow network and restore the favorite after the first look.
-    /// 12 + 13 = 25 seconds after the click, when the store's hold on the star ends too.
-    nonisolated static let unfavoriteSecondLookDelay = Duration.seconds(13)
 
     // MARK: PlayerController
 
@@ -169,21 +161,16 @@ public final class AppleMusicController: PlayerController {
     /// song a new one (favoriting a streamed song adds it to the library), by its title and artist. What it did
     /// is logged, without any of the track's details, and the player is read again afterwards.
     ///
-    /// Removing a favorite gets a follow-up that adding one doesn't need. Music applies a favorite at once, as a
-    /// cloud edit (`eFavoriteStoreItemsInLibrary`, about 2.5 seconds), and its star turns on. A removal written
-    /// by a script reads back as done straight away, but Music only schedules its favorites sync
-    /// (`StoreSyncAppleMusicLoveCache`) exactly 10 seconds later, and the first sync after such a removal
-    /// restores the favorite. A second removal sent after that sync schedules another one, 10 seconds later, and
-    /// that one removes it for good. So once a removal has been written (`matched=true`), the controller reads
-    /// Music again after `unfavoriteRecheckDelay` and sends the removal once more if the favorite is back (see
-    /// `recheckUnfavorite`). That is a task of the controller's own, so it doesn't depend on the panel being
-    /// open. Any newer favorite request (of either kind), `stop()` and Music quitting cancel it.
+    /// A removal that Music took (`matched=true`) gets a follow-up, because Music's own sync can restore the
+    /// favorite (see `FavoriteSync`): `recheckUnfavorite` reads Music again later and sends the removal once more
+    /// if it is back. That is a task of the controller's own, so it doesn't depend on the panel being open. Any
+    /// newer favorite request (of either kind), `stop()` and Music quitting cancel it.
     public func setFavorited(_ favorited: Bool, track: Track) async {
         // Whatever waited for an earlier request is obsolete now, whichever way this one goes.
         let request = pendingRecheck.begin()
         let written = await writeFavorite(favorited, track: track)
         if UnfavoriteRecheck.isNeeded(afterWriting: favorited, result: written) {
-            pendingRecheck.schedule(request, after: Self.unfavoriteRecheckDelay) { [weak self] in
+            pendingRecheck.schedule(request, after: .seconds(FavoriteSync.recheckDelay)) { [weak self] in
                 await self?.recheckUnfavorite(of: track)
             }
         }
@@ -200,10 +187,10 @@ public final class AppleMusicController: PlayerController {
         return MusicFavoriteResult(result.value)
     }
 
-    /// The follow-up of an unfavorite, `unfavoriteRecheckDelay` later: reads Music and, if it lists `track` as a
-    /// favorite again, sends the removal once more and pushes what Music says after it. If the removal still
-    /// holds, it looks once more `unfavoriteSecondLookDelay` later, in case Music's sync was slow. Each look is
-    /// logged as fixed words only (`UnfavoriteRecheck.logLine`).
+    /// The follow-up of an unfavorite, `FavoriteSync.recheckDelay` later: reads Music and, if it lists `track` as
+    /// a favorite again, sends the removal once more and pushes what Music says after it. If the removal still
+    /// holds, it looks once more `FavoriteSync.secondLookDelay` later, in case Music's sync was slow. Each look
+    /// is logged as fixed words only (`UnfavoriteRecheck.logLine`).
     ///
     /// The removal goes through `writeFavorite`, not `setFavorited`, so it schedules no follow-up of its own: it
     /// is one resend per click at most, never a loop. A newer request, `stop()` or Music quitting can cancel this
@@ -211,7 +198,7 @@ public final class AppleMusicController: PlayerController {
     private func recheckUnfavorite(of track: Track) async {
         guard var outcome = await look(at: track) else { return }
         if outcome == .held {
-            do { try await Task.sleep(for: Self.unfavoriteSecondLookDelay) } catch { return }
+            do { try await Task.sleep(for: .seconds(FavoriteSync.secondLookDelay)) } catch { return }
             guard let second = await look(at: track) else { return }
             outcome = second
         }

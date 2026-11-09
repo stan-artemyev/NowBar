@@ -204,13 +204,25 @@ struct PlayPauseTests {
         #expect(harness.store.snapshot == resumed)
     }
 
+    @Test func theSameSongUnderANewIDKeepsTheHold() async {
+        let harness = harness(Fixture.running(.playing, track: Fixture.track(id: "a")))
+        await harness.store.playPause().value   // pause
+
+        // Music re-identified the song (favoriting a streamed one adds it to the library under a new ID) and
+        // still says "playing" for a moment. It is the same song, so the pause the user asked for still stands.
+        clock.advance(by: 0.2)
+        harness.player.push(Fixture.running(.playing, track: Fixture.track(id: "a-in-library"), position: 31, capturedAt: clock.current))
+        #expect(harness.store.snapshot.state == .paused)
+        #expect(harness.store.snapshot.track?.id == "a-in-library")   // everything else is taken as it comes
+    }
+
     @Test func aTrackChangeDuringTheHoldIsAcceptedAtOnce() async {
         let harness = harness(Fixture.running(.playing, track: Fixture.track(id: "a")))
         await harness.store.playPause().value
 
         // Music moved on to another track and is playing it: what the user asked for "a" no longer applies.
         clock.advance(by: 0.2)
-        let next = Fixture.running(.playing, track: Fixture.track(id: "b"), position: 0, capturedAt: clock.current)
+        let next = Fixture.running(.playing, track: Fixture.track(id: "b", title: "Another Song"), position: 0, capturedAt: clock.current)
         harness.player.push(next)
         #expect(harness.store.snapshot == next)
 

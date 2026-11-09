@@ -165,9 +165,7 @@ public final class DemoPlayerController: PlayerController {
     /// its ID or by its title and artist (and it still reports when it isn't).
     public func setFavorited(_ favorited: Bool, track: Track) async {
         guard availability == .running, let current = currentTrack else { return }
-        let isSameTrack = current.id == track.id
-            || (!track.title.isEmpty && current.title == track.title && current.artist == track.artist)
-        if isSameTrack {
+        if current.isSameSong(as: track) {
             if favorited { favorites.insert(current.id) } else { favorites.remove(current.id) }
         }
         emit()
@@ -200,8 +198,7 @@ public final class DemoPlayerController: PlayerController {
     }
 
     private func position(at date: Date) -> TimeInterval {
-        guard state == .playing, let duration = currentTrack?.duration else { return basePosition }
-        return min(basePosition + max(0, date.timeIntervalSince(anchor)), duration)
+        makeSnapshot().position(at: date)
     }
 
     private func go(to newIndex: Int) {
@@ -213,7 +210,8 @@ public final class DemoPlayerController: PlayerController {
     }
 
     private func tick() {
-        guard state == .playing, let track = currentTrack else { return }
+        // A live stream (duration 0) never ends.
+        guard state == .playing, let track = currentTrack, track.duration > 0 else { return }
         if position(at: Date()) >= track.duration {
             go(to: index + 1)
             emit()

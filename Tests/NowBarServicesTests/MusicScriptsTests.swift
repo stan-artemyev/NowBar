@@ -46,7 +46,7 @@ import NowBarCore
         let control = handlers(in: MusicScripts.control)
         // `play` is sent only when Music isn't already playing, so it can never restart the track.
         #expect(control["nb_play"]?.contains("if player state is not playing then play\n") == true)
-        #expect(control["nb_pause"]?.contains("\(musicTarget) to pause\n") == true)
+        #expect(control["nb_pause"]?.contains("\(musicTarget)\npause\nend tell\n") == true)
         // A toggle flips playback back whenever a command is repeated or arrives late.
         #expect(control["nb_playpause"] == nil)
         #expect(!MusicScripts.control.contains("playpause"))

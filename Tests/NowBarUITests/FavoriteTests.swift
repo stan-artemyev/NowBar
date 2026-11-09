@@ -100,7 +100,7 @@ struct FavoriteTests {
     // MARK: Favorite hold
 
     @Test func theHoldLastsTenSeconds() {
-        #expect(PlayerStore.favoriteHoldDuration == 10)
+        #expect(FavoriteSync.favoriteHold == 10)
     }
 
     @Test func aStaleAnswerRightAfterTheClickDoesNotTurnTheStarOff() async {
@@ -206,10 +206,11 @@ struct FavoriteTests {
         return harness
     }
 
-    @Test func theUnfavoriteHoldLastsTwentyFiveSeconds() {
-        #expect(PlayerStore.unfavoriteHoldDuration == 25)
-        // Long enough for both syncs: the first at 10 s, then the resend at 12 s and the sync 10 s after it.
-        #expect(PlayerStore.unfavoriteHoldDuration > 12 + 10)
+    @Test func theUnfavoriteHoldOutlastsBothOfTheControllersLooks() {
+        #expect(FavoriteSync.unfavoriteHold == 28)
+        // The controller looks at Music again 12 s after the removal and once more 13 s later. The star has to stay
+        // off past the second look, or a removal that is sent again there would show as a favorite in between.
+        #expect(FavoriteSync.unfavoriteHold > FavoriteSync.recheckDelay + FavoriteSync.secondLookDelay)
     }
 
     @Test func anUnfavoriteTurnsTheStarOffAtOnce() async {
@@ -259,14 +260,14 @@ struct FavoriteTests {
         #expect(snapshot.position == 40)
     }
 
-    @Test func afterTwentyFiveSecondsMusicsValueWins() async {
+    @Test func afterTheUnfavoriteHoldMusicsValueWins() async {
         let harness = await harnessAfterAnUnfavorite()   // t = 0
 
-        clock.advance(by: 24.5)
+        clock.advance(by: FavoriteSync.unfavoriteHold - 0.5)
         harness.player.push(music(favorited: true))
         #expect(harness.store.snapshot.track?.isFavorited == false)   // still on hold
 
-        clock.advance(by: 0.5)   // t = 25
+        clock.advance(by: 0.5)   // the hold ends
         harness.player.push(music(favorited: true))
         #expect(harness.store.snapshot.track?.isFavorited == true)    // Music never removed it: the panel follows it again
     }
@@ -274,7 +275,7 @@ struct FavoriteTests {
     @Test func afterTheUnfavoriteHoldEveryAnswerIsTakenAsItComes() async {
         let harness = await harnessAfterAnUnfavorite()
 
-        clock.advance(by: 26)
+        clock.advance(by: FavoriteSync.unfavoriteHold + 1)
         harness.player.push(music(favorited: true))
         #expect(harness.store.snapshot.track?.isFavorited == true)
         harness.player.push(music(favorited: false))
@@ -435,7 +436,7 @@ struct FavoriteTests {
         let harness = harness(music(favorited: false))
         await harness.store.toggleFavorite().value   // t = 0: favorite, held until t = 10
         clock.advance(by: 2)
-        await harness.store.toggleFavorite().value   // t = 2: unfavorite, held until t = 27
+        await harness.store.toggleFavorite().value   // t = 2: unfavorite, held for `unfavoriteHold` from here
 
         // The first cloud edit lands: Music says "favorited". That answers the first click, not the second.
         clock.advance(by: 3)   // t = 5
@@ -448,11 +449,11 @@ struct FavoriteTests {
         #expect(harness.store.snapshot.track?.isFavorited == false)
 
         // And it lasts as long as an unfavorite hold does, counted from the second click.
-        clock.advance(by: 15.5)   // t = 26.5
+        clock.advance(by: FavoriteSync.unfavoriteHold - 9.5)   // half a second before the second hold ends
         harness.player.push(music(favorited: true))
         #expect(harness.store.snapshot.track?.isFavorited == false)
 
-        clock.advance(by: 1)   // t = 27.5
+        clock.advance(by: 1)   // half a second after
         harness.player.push(music(favorited: true))
         #expect(harness.store.snapshot.track?.isFavorited == true)
     }
@@ -483,19 +484,19 @@ struct FavoriteTests {
     }
 
     @Test func aNewUnfavoriteAfterTheHoldRanOutStartsAFreshHold() async {
-        let harness = await harnessAfterAnUnfavorite()   // t = 0: held until t = 25
-        clock.advance(by: 26)
+        let harness = await harnessAfterAnUnfavorite()   // held for `unfavoriteHold`
+        clock.advance(by: FavoriteSync.unfavoriteHold + 1)
         harness.player.push(music(favorited: true))      // Music never removed it, and the hold is over
         #expect(harness.store.snapshot.track?.isFavorited == true)
 
-        await harness.store.toggleFavorite().value       // t = 26: unfavorite again, held until t = 51
+        await harness.store.toggleFavorite().value       // unfavorite again: a fresh hold starts here
         #expect(harness.player.calls == ["start", "setFavorited(false, track: a)", "setFavorited(false, track: a)"])
         #expect(harness.store.snapshot.track?.isFavorited == false)
 
-        clock.advance(by: 24)   // t = 50
+        clock.advance(by: FavoriteSync.unfavoriteHold - 1)
         harness.player.push(music(favorited: true))
         #expect(harness.store.snapshot.track?.isFavorited == false)
-        clock.advance(by: 1)    // t = 51
+        clock.advance(by: 1)    // the fresh hold ends
         harness.player.push(music(favorited: true))
         #expect(harness.store.snapshot.track?.isFavorited == true)
     }

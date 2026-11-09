@@ -141,7 +141,7 @@ import NowBarCore
 
     @Test func theRecheckComesTwelveSecondsAfterTheRemoval() {
         // Music's favorites sync runs 10 seconds after the removal was written, and this leaves it time to finish.
-        #expect(AppleMusicController.unfavoriteRecheckDelay == .seconds(12))
+        #expect(FavoriteSync.recheckDelay == 12)
     }
 }
 

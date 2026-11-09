@@ -1,14 +1,8 @@
 import Foundation
 import NowBarCore
 
-/// What to do when NowBar reads Music again after removing a favorite: whether to do it at all, and what the
-/// reading means. Pure, so it is unit tested.
-///
-/// Why NowBar reads it again at all: a removal written by a script reads back as done at once, but Music only
-/// schedules its favorites sync (`StoreSyncAppleMusicLoveCache`) exactly 10 seconds later, and the first sync
-/// after such a removal restores the favorite. A second removal sent after that sync schedules another sync 10
-/// seconds later, and that one removes the favorite for good. So `AppleMusicController` reads Music once the
-/// first sync has run and, when the favorite is back, sends the removal once more.
+/// What a reading of Music means for a favorite that was removed a moment ago (see `FavoriteSync` for why NowBar
+/// reads it again at all). Pure, so it is unit tested.
 enum UnfavoriteRecheck: Sendable, Equatable {
     /// The clicked song is the current one and Music lists it as a favorite again: send the removal once more.
     case resend
@@ -29,18 +23,10 @@ enum UnfavoriteRecheck: Sendable, Equatable {
 
     /// `clicked` is the track the removal was requested for, and `fresh` a reading of Music taken after its sync.
     static func decide(clicked: Track, fresh: PlayerSnapshot) -> UnfavoriteRecheck {
-        guard fresh.availability == .running, let current = fresh.track, isSameSong(current, clicked) else {
+        guard fresh.availability == .running, let current = fresh.track, current.isSameSong(as: clicked) else {
             return .trackChanged
         }
         return current.isFavorited ? .resend : .held
-    }
-
-    /// Whether `a` and `b` are the same song: the same ID or, because Music can give a song a new one (favoriting a
-    /// streamed song adds it to the library), the same title and artist. A track without a title can't be
-    /// recognised by its name. This is the rule of the `nb_favorite` script, so the follow-up applies to the
-    /// track that script would have written to.
-    static func isSameSong(_ a: Track, _ b: Track) -> Bool {
-        a.id == b.id || (!a.title.isEmpty && a.title == b.title && a.artist == b.artist)
     }
 
     /// The line to log for this outcome. Only fixed words, never a title, an artist or an ID.
