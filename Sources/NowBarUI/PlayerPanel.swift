@@ -81,6 +81,11 @@ public struct PlayerPanel: View {
                 .frame(height: 22)
                 .padding(.bottom, 12)
 
+            if store.mediaKeysNeedAccess {
+                MediaKeyNotice(store: store)
+                    .padding(.bottom, 12)
+            }
+
             nowPlaying(content, snapshot: snapshot, compact: compact)
 
             actionBlock(content, snapshot: snapshot)
@@ -271,7 +276,7 @@ struct MoreMenu: View {
 
                 if store.hasMediaKeyTap {
                     Toggle("Media Keys Control Apple Music", isOn: $store.mediaKeysEnabled)
-                    if store.mediaKeysEnabled && !store.mediaKeysTrusted {
+                    if store.mediaKeysNeedAccess {
                         Button("Allow Media Key Access…") { store.requestMediaKeyAccess() }
                     }
                 }

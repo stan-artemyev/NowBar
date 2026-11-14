@@ -191,18 +191,62 @@ struct StartupTests {
         #expect(harness.mediaKeys.requestTrustCount == 0)
     }
 
-    @Test func anOptionLeftOnWithoutPermissionDoesNotAskAtLaunchEither() {
-        // The user turned it on earlier and NowBar has no permission (yet, or any more). The menu offers Allow
-        // Media Key Access… for that, but nothing prompts by itself when the app starts.
+    @Test func anOptionLeftOnWithoutPermissionAsksOnceAtLaunch() {
+        // The user turned it on earlier, and this build has no permission: macOS forgets it when the app is
+        // updated. Left alone, the keys would silently go to whatever else is playing, so NowBar asks right away.
         let harness = Harness(mediaKeysTrusted: false, configure: { $0.set(true, forKey: SettingsKey.mediaKeysEnabled) })
         harness.store.start()
         #expect(harness.mediaKeys.isEnabled == true)
-        #expect(harness.store.mediaKeysTrusted == false)   // what makes the menu show Allow Media Key Access…
-        #expect(harness.mediaKeys.requestTrustCount == 0)
+        #expect(harness.mediaKeys.requestTrustCount == 1)
+        harness.store.start()   // only the first start does anything
+        #expect(harness.mediaKeys.requestTrustCount == 1)
 
         let relaunched = harness.relaunch(mediaKeysTrusted: false)
         relaunched.store.start()
-        #expect(relaunched.mediaKeys.requestTrustCount == 0)
+        #expect(relaunched.mediaKeys.requestTrustCount == 1)   // and every launch without it asks once
+    }
+
+    @Test func anOptionLeftOnWithPermissionAsksForNothingAtLaunch() {
+        let harness = Harness(mediaKeysTrusted: true, configure: { $0.set(true, forKey: SettingsKey.mediaKeysEnabled) })
+        harness.store.start()
+        #expect(harness.mediaKeys.isEnabled == true)
+        #expect(harness.mediaKeys.requestTrustCount == 0)
+    }
+
+    // MARK: The notice that media keys need access
+
+    @Test func mediaKeysNeedAccessOnlyWhileSwitchedOnWithoutPermission() {
+        let off = Harness(mediaKeysTrusted: false)
+        off.store.start()
+        #expect(off.store.mediaKeysNeedAccess == false)   // off: nothing is needed, and nothing is shown
+
+        let missing = Harness(mediaKeysTrusted: false, configure: { $0.set(true, forKey: SettingsKey.mediaKeysEnabled) })
+        missing.store.start()
+        #expect(missing.store.mediaKeysNeedAccess == true)
+
+        let granted = Harness(mediaKeysTrusted: true, configure: { $0.set(true, forKey: SettingsKey.mediaKeysEnabled) })
+        granted.store.start()
+        #expect(granted.store.mediaKeysNeedAccess == false)
+    }
+
+    @Test func theNoticeFollowsThePermissionAndTheOption() {
+        let harness = Harness(mediaKeysTrusted: false, configure: { $0.set(true, forKey: SettingsKey.mediaKeysEnabled) })
+        harness.store.start()
+        #expect(harness.store.mediaKeysNeedAccess == true)
+
+        // The user switches NowBar on in System Settings; the tap's poll reports it.
+        harness.mediaKeys.isTrusted = true
+        harness.mediaKeys.onTrustChange?(true)
+        #expect(harness.store.mediaKeysNeedAccess == false)
+
+        // Access is taken away again while NowBar runs.
+        harness.mediaKeys.isTrusted = false
+        harness.mediaKeys.onTrustChange?(false)
+        #expect(harness.store.mediaKeysNeedAccess == true)
+
+        // Turning the option off ends the need.
+        harness.store.mediaKeysEnabled = false
+        #expect(harness.store.mediaKeysNeedAccess == false)
     }
 
     @Test func switchingMediaKeysOnAsksForAccessWhenNotTrusted() {
@@ -250,22 +294,24 @@ struct StartupTests {
     @Test func settingTheOptionToTheValueItAlreadyHasAsksForNothing() {
         let harness = Harness(mediaKeysTrusted: false, configure: { $0.set(true, forKey: SettingsKey.mediaKeysEnabled) })
         harness.store.start()
+        #expect(harness.mediaKeys.requestTrustCount == 1)   // the launch asked
 
         harness.store.mediaKeysEnabled = true   // it was on already: nothing was switched on
-        #expect(harness.mediaKeys.requestTrustCount == 0)
+        #expect(harness.mediaKeys.requestTrustCount == 1)
         harness.store.mediaKeysEnabled = false
-        #expect(harness.mediaKeys.requestTrustCount == 0)
+        #expect(harness.mediaKeys.requestTrustCount == 1)
     }
 
-    @Test func theMenuItemAsksExplicitlyEveryTimeItIsChosen() {
+    @Test func allowAsksExplicitlyEveryTimeItIsChosen() {
+        // The Allow… button of the notice and the menu item both come through here.
         let harness = Harness(mediaKeysTrusted: false, configure: { $0.set(true, forKey: SettingsKey.mediaKeysEnabled) })
         harness.store.start()
-        #expect(harness.mediaKeys.requestTrustCount == 0)
+        #expect(harness.mediaKeys.requestTrustCount == 1)   // the launch asked
 
         harness.store.requestMediaKeyAccess()
-        #expect(harness.mediaKeys.requestTrustCount == 1)
-        harness.store.requestMediaKeyAccess()
         #expect(harness.mediaKeys.requestTrustCount == 2)
+        harness.store.requestMediaKeyAccess()
+        #expect(harness.mediaKeys.requestTrustCount == 3)
     }
 
     @Test func worksWithoutMediaKeys() {

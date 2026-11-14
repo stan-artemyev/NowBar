@@ -341,6 +341,18 @@ struct SnapshotRendererTests {
         #expect(bitmap.pixelsHigh == 1008)    // 504 pt at 2x: header, artwork, title, progress, transport, volume
     }
 
+    @Test func theMediaKeyNoticeAddsARowAboveTheArtwork() async throws {
+        // 34 pt of notice and 12 pt of spacing, at 2x, and only while media keys are on without access.
+        for (plain, noticed) in [(SnapshotScenario.largePlaying, SnapshotScenario.largeMediaKeysNeedAccess),
+                                 (.compactPlaying, .compactMediaKeysNeedAccess)] {
+            let without = try #require(await SnapshotRenderer.render(plain, scheme: .light, now: Date()))
+            let with = try #require(await SnapshotRenderer.render(noticed, scheme: .light, now: Date()))
+            let plainHeight = try #require(NSBitmapImageRep(data: without)).pixelsHigh
+            let noticedHeight = try #require(NSBitmapImageRep(data: with)).pixelsHigh
+            #expect(noticedHeight == plainHeight + 92)
+        }
+    }
+
     @Test func compactIsShorterThanLarge() async throws {
         let compact = try #require(await SnapshotRenderer.render(.compactPlaying, scheme: .light, now: Date()))
         let large = try #require(await SnapshotRenderer.render(.largePlaying, scheme: .light, now: Date()))

@@ -35,8 +35,9 @@ public final class PlayerStore {
     }
 
     /// Off by default: macOS already sends the media keys to Music while Music was the last thing to play. Turning
-    /// this on makes NowBar take them over, which needs Accessibility permission, so that is the only time NowBar
-    /// asks for it: every time the option is switched on while NowBar isn't trusted, and never at launch.
+    /// this on makes NowBar take them over, which needs Accessibility permission. NowBar only asks for it while
+    /// this is on: every time the option is switched on without the permission, and once at launch when the
+    /// option was left on but the permission is missing (macOS forgets it when the app is updated).
     public var mediaKeysEnabled: Bool {
         didSet {
             defaults.set(mediaKeysEnabled, forKey: SettingsKey.mediaKeysEnabled)
@@ -149,6 +150,9 @@ public final class PlayerStore {
             mediaKeys.handler = { [weak self] key in self?.handleMediaKey(key) ?? false }
             mediaKeys.isEnabled = mediaKeysEnabled
             mediaKeysTrusted = mediaKeys.isTrusted
+            // The user turned media keys on earlier, but this build has no permission: say so now, or the keys
+            // would silently go to whatever else is playing.
+            if mediaKeysNeedAccess { requestMediaKeyAccess() }
         }
     }
 
@@ -185,6 +189,10 @@ public final class PlayerStore {
 
     /// False when there is no key tap (`--demo`), so the menu can leave out the media key items.
     public var hasMediaKeyTap: Bool { mediaKeys != nil }
+
+    /// True while media keys are switched on but NowBar lacks the Accessibility permission they need, so the
+    /// keys aren't reaching it. The panel shows a notice then.
+    public var mediaKeysNeedAccess: Bool { hasMediaKeyTap && mediaKeysEnabled && !mediaKeysTrusted }
 
     /// Decides whether a media key press is consumed. Transport keys start their action and are consumed while
     /// the music app is running; volume keys are left to macOS, whose changes the volume row mirrors.
@@ -324,8 +332,9 @@ public final class PlayerStore {
         NSWorkspace.shared.open(url)
     }
 
-    /// Shows the Accessibility prompt (or opens the right System Settings pane). Only ever the result of an explicit
-    /// action of the user: turning media keys on, or choosing Allow Media Key Access… in the menu.
+    /// Asks for the Accessibility permission: the system prompt, or the right System Settings pane. Only while
+    /// the user wants media keys: when they turn the option on, choose Allow… in the panel or the menu, or
+    /// launch NowBar with the option on and the permission missing.
     public func requestMediaKeyAccess() {
         mediaKeys?.requestTrust()
     }

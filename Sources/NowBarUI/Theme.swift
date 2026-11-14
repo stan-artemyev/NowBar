@@ -23,6 +23,10 @@ enum Palette {
     static let artLine = Color.primary.opacity(0.16)
     static let pill = Color.primary.opacity(0.10)
     static let pillHover = Color.primary.opacity(0.15)
+
+    /// The notice that something needs the user's attention: an amber mark on a faint amber tile.
+    static let warning = Color(red: 0xF5 / 255, green: 0x9E / 255, blue: 0x0B / 255)       // #F59E0B
+    static let warningTile = warning.opacity(0.16)
 }
 
 /// How the panel is being drawn. The snapshot renderer pins the clock (so positions are stable)
@@ -87,22 +91,25 @@ struct HoverCircleButtonStyle: ButtonStyle {
     }
 }
 
-/// The capsule call-to-action ("Open Apple Music", "Open System Settings").
+/// The capsule call-to-action ("Open Apple Music", "Open System Settings"). The compact one fits inside a notice.
 struct PillButtonStyle: ButtonStyle {
+    var isCompact = false
+
     func makeBody(configuration: Configuration) -> some View {
-        PillBody(configuration: configuration)
+        PillBody(configuration: configuration, isCompact: isCompact)
     }
 
     private struct PillBody: View {
         let configuration: ButtonStyleConfiguration
+        let isCompact: Bool
         @LocalState private var isHovering = false
 
         var body: some View {
             configuration.label
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: isCompact ? 12 : 13, weight: .medium))
                 .foregroundStyle(Color.primary)
-                .padding(.horizontal, 14)
-                .frame(height: 28)
+                .padding(.horizontal, isCompact ? 10 : 14)
+                .frame(height: isCompact ? 22 : 28)
                 .background(Capsule().fill(isHovering ? Palette.pillHover : Palette.pill))
                 .contentShape(Capsule())
                 .scaleEffect(configuration.isPressed ? 0.97 : 1)

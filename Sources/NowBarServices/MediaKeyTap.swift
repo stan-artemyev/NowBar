@@ -40,23 +40,37 @@ public final class MediaKeyTap: MediaKeyIntercepting {
     private var gate = MediaKeyGate()
     private var lastKnownTrust: Bool
     private var pollTask: Task<Void, Never>?
-    private var hasShownPrompt = false
+    private var hasRequestedTrust = false
 
     private static let trustPollInterval = Duration.seconds(2)
     private static let accessibilitySettingsURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
 
     // MARK: MediaKeyIntercepting
 
-    /// Shows the system Accessibility prompt. macOS may not show it again after it has been dismissed, so any
-    /// later request while still untrusted opens the Accessibility pane of System Settings instead.
+    /// Asks for the Accessibility permission, and does nothing when NowBar already has it. The first request of
+    /// a launch clears an approval left over from an older build and shows the system prompt; later ones open
+    /// the Accessibility settings too (see `AccessibilityRequest`).
     public func requestTrust() {
-        guard !AXIsProcessTrusted() else { return }
-        if !hasShownPrompt {
-            hasShownPrompt = true
+        let steps = AccessibilityRequest.steps(isTrusted: AXIsProcessTrusted(), isFirstRequest: !hasRequestedTrust)
+        guard !steps.isEmpty else { return }
+        hasRequestedTrust = true
+        perform(steps[...])
+    }
+
+    /// Carries out `steps` in order. Clearing the old approval takes a moment, and the rest waits for it.
+    private func perform(_ steps: ArraySlice<AccessibilityRequest.Step>) {
+        guard let step = steps.first else { return }
+        let rest = steps.dropFirst()
+        switch step {
+        case .clearOldApproval:
+            AccessibilityRequest.clearOldApproval { [weak self] in self?.perform(rest) }
+        case .prompt:
             let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
             _ = AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary)
-        } else if let url = Self.accessibilitySettingsURL {
-            NSWorkspace.shared.open(url)
+            perform(rest)
+        case .openSettings:
+            if let url = Self.accessibilitySettingsURL { NSWorkspace.shared.open(url) }
+            perform(rest)
         }
     }
 

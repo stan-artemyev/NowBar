@@ -98,11 +98,14 @@ enum SnapshotScenario: String, CaseIterable {
     case largeMuted = "large-muted"
     case compactNotAuthorized = "compact-not-authorized"
     case compactNothingPlaying = "compact-nothing-playing"
+    case largeMediaKeysNeedAccess = "large-media-keys-need-access"
+    case compactMediaKeysNeedAccess = "compact-media-keys-need-access"
 
     @MainActor
     func makeStore(defaults: UserDefaults, now: Date) -> PlayerStore {
         var layout = PanelLayout.large
         var volume = DemoSystemVolume(level: 0.6)
+        var mediaKeys: MediaKeyIntercepting?
         let player: DemoPlayerController
 
         switch self {
@@ -141,12 +144,28 @@ enum SnapshotScenario: String, CaseIterable {
         case .compactNothingPlaying:
             layout = .compact
             player = DemoPlayerController(availability: .running, state: .stopped, capturedAt: now)
+        case .largeMediaKeysNeedAccess, .compactMediaKeysNeedAccess:
+            layout = self == .compactMediaKeysNeedAccess ? .compact : .large
+            // Media keys are switched on, but macOS hasn't given NowBar access.
+            defaults.set(true, forKey: SettingsKey.mediaKeysEnabled)
+            mediaKeys = UntrustedMediaKeys()
+            player = DemoPlayerController(availability: .running, state: .playing, trackIndex: 0, position: 84, capturedAt: now)
         }
 
-        let store = PlayerStore(player: player, volume: volume, mediaKeys: nil, defaults: defaults, launchAtLoginService: StaticLaunchAtLogin())
+        let store = PlayerStore(player: player, volume: volume, mediaKeys: mediaKeys, defaults: defaults, launchAtLoginService: StaticLaunchAtLogin())
         store.layout = layout
         return store
     }
+}
+
+/// A media key source without Accessibility permission, for the notice. It never taps or asks for anything.
+@MainActor
+private final class UntrustedMediaKeys: MediaKeyIntercepting {
+    var handler: ((MediaKey) -> Bool)?
+    var onTrustChange: ((Bool) -> Void)?
+    var isEnabled = false
+    let isTrusted = false
+    func requestTrust() {}
 }
 
 /// Snapshots never touch the real login items.
